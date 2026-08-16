@@ -1,0 +1,12 @@
+[gd_resource type="Resource" script_class="CardResource" format=3]
+
+[ext_resource type="Script" path="res://scripts/core/card_resource.gd" id="1_rbdft"]
+
+[resource]
+script = ExtResource("1_rbdft")
+id = "treasure_money_is_power"
+display_name = "The Money = Power"
+type = 5
+cost_cents = 8
+text = "Passive: your attack rolls gain +1 for every 4 cents you have."
+effect_script_path = "res://scripts/cards/effects/money_is_power.gd"

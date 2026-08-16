@@ -1,0 +1,12 @@
+[gd_resource type="Resource" script_class="CardResource" format=3]
+
+[ext_resource type="Script" path="res://scripts/core/card_resource.gd" id="1_vl3o4"]
+
+[resource]
+script = ExtResource("1_vl3o4")
+id = "loot_pennies"
+display_name = "Pennies"
+type = 4
+text = "Gain 2 cents."
+simple_effect = "gain_cents"
+simple_effect_value = 2

@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="CardResource" format=3]
+
+[ext_resource type="Script" path="res://scripts/core/card_resource.gd" id="1_hijju"]
+
+[resource]
+script = ExtResource("1_hijju")
+id = "treasure_the_bible"
+display_name = "The Bible"
+type = 5
+cost_cents = 10
+text = "Use: deal 3 damage to target monster."
+effect_script_path = "res://scripts/cards/effects/the_bible.gd"
+needs_target = true
+playable = true

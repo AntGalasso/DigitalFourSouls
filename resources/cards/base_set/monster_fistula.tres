@@ -1,0 +1,12 @@
+[gd_resource type="Resource" script_class="CardResource" format=3]
+
+[ext_resource type="Script" path="res://scripts/core/card_resource.gd" id="1_ypeln"]
+
+[resource]
+script = ExtResource("1_ypeln")
+id = "monster_fistula"
+display_name = "Fistula"
+type = 1
+die_value = 3
+hp = 3
+text = "Deals 1 damage to a random player when it deals damage."

@@ -1,0 +1,4 @@
+@echo off
+rem Re-run the CSV -> .tres import pipeline and verify the generated cards.
+set GODOT_EXE=%~dp0Godot_v4.7.1-stable_win64.exe
+"%GODOT_EXE%" --headless --path "%~dp0." -s res://scripts/tools/run_import_cli.gd

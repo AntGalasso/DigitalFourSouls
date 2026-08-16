@@ -1,0 +1,19 @@
+[remap]
+
+importer="csv_translation"
+type="Translation"
+uid="uid://cbck84so8sua"
+
+[deps]
+
+files=["res://data/cards_base_set_template.display.translation", "res://data/cards_base_set_template.type.translation", "res://data/cards_base_set_template.cost.translation", "res://data/cards_base_set_template.die.translation", "res://data/cards_base_set_template.hp.translation", "res://data/cards_base_set_template.roll.translation", "res://data/cards_base_set_template.soul.translation", "res://data/cards_base_set_template.text.translation", "res://data/cards_base_set_template.effect.translation", "res://data/cards_base_set_template.trigger.translation", "res://data/cards_base_set_template.simple.translation", "res://data/cards_base_set_template.simple.translation", "res://data/cards_base_set_template.complexity.translation"]
+
+source_file="res://data/cards_base_set_template.csv"
+dest_files=["res://data/cards_base_set_template.display.translation", "res://data/cards_base_set_template.type.translation", "res://data/cards_base_set_template.cost.translation", "res://data/cards_base_set_template.die.translation", "res://data/cards_base_set_template.hp.translation", "res://data/cards_base_set_template.roll.translation", "res://data/cards_base_set_template.soul.translation", "res://data/cards_base_set_template.text.translation", "res://data/cards_base_set_template.effect.translation", "res://data/cards_base_set_template.trigger.translation", "res://data/cards_base_set_template.simple.translation", "res://data/cards_base_set_template.simple.translation", "res://data/cards_base_set_template.complexity.translation"]
+
+[params]
+
+compress=1
+delimiter=0
+unescape_keys=false
+unescape_translations=true

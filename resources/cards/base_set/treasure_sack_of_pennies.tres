@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="CardResource" format=3]
+
+[ext_resource type="Script" path="res://scripts/core/card_resource.gd" id="1_20icy"]
+
+[resource]
+script = ExtResource("1_20icy")
+id = "treasure_sack_of_pennies"
+display_name = "Sack of Pennies"
+type = 5
+cost_cents = 6
+text = "Passive: at the start of your turn, gain 3 cents."
+trigger_events = Array[String](["turn_started"])
+simple_effect = "gain_cents"
+simple_effect_value = 3

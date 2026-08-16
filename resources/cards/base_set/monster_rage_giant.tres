@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="CardResource" format=3]
+
+[ext_resource type="Script" path="res://scripts/core/card_resource.gd" id="1_onkio"]
+
+[resource]
+script = ExtResource("1_onkio")
+id = "monster_rage_giant"
+display_name = "Rage Giant"
+type = 1
+die_value = 3
+hp = 4
+soul_reward = "red"
+text = "Deals 1 damage to a random player when it deals damage."

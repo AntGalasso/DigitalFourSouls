@@ -1,0 +1,27 @@
+id,display_name,type,cost_cents,die_value,hp,roll_bonus,soul_reward,text,effect_script_path,trigger_events,simple_effect,simple_effect_value,needs_target,playable,complexity
+monster_gaper,Gaper,MONSTER,0,4,1,0,,"Deals 1 damage to a random player when it deals damage.",,,,0,0,0,simple
+monster_pooter,Pooter,MONSTER,0,3,2,0,,"Ranged attacks only. Deals 1 damage to a random player when it deals damage.",,,,0,0,0,simple
+monster_fly,Fly,MONSTER,0,5,1,0,,"Deals 1 damage to a random player when it deals damage.",,,,0,0,0,simple
+monster_attack_fly,Attack Fly,MONSTER,0,3,1,0,,"Deals 1 damage to a random player when it deals damage.",,,,0,0,0,simple
+monster_red_host,Red Host,MONSTER,0,4,2,0,,"Deals 1 damage to a random player when it deals damage.",,,,0,0,0,simple
+monster_mauler,Mauler,MONSTER,0,3,2,0,,"Deals 1 damage to a random player when it deals damage.",,,,0,0,0,simple
+monster_gusher,Gusher,MONSTER,0,2,2,0,,"Deals 2 damage to a random player when it deals damage.",,,,0,0,0,simple
+monster_hive,Hive,MONSTER,0,3,3,0,,"Deals 1 damage to a random player when it deals damage.",,,,0,0,0,simple
+monster_rage_giant,Rage Giant,MONSTER,0,3,4,0,red,"Deals 1 damage to a random player when it deals damage.",,,,0,0,0,simple
+monster_dinga,Dinga,MONSTER,0,4,2,0,,"Deals 1 damage to a random player when it deals damage.",,,,0,0,0,simple
+monster_dingling,Dingling,MONSTER,0,2,1,0,,"Deals 1 damage to a random player when it deals damage.",,,,0,0,0,simple
+monster_globbin,Globbin,MONSTER,0,3,1,0,,"Deals 1 damage to a random player when it deals damage.",,,,0,0,0,simple
+monster_gurdy,Gurdy,MONSTER,0,3,4,0,blue,"Deals 1 damage to a random player when it deals damage.",,,,0,0,0,simple
+monster_fistula,Fistula,MONSTER,0,3,3,0,,"Deals 1 damage to a random player when it deals damage.",,,,0,0,0,simple
+loot_bomb,Bomb,LOOT,0,0,0,0,,"Deal 2 damage to target monster.",res://scripts/cards/effects/bomb.gd,,,0,1,0,simple
+loot_dinner,Dinner,LOOT,0,0,0,0,,"Gain 1 HP.",,,gain_hp,1,0,0,simple
+loot_pennies,Pennies,LOOT,0,0,0,0,,"Gain 2 cents.",,,gain_cents,2,0,0,simple
+loot_full_health,Full Health,LOOT,0,0,0,0,,"Gain 2 HP.",,,gain_hp,2,0,0,simple
+loot_swallowed_penny,Swallowed Penny,LOOT,0,0,0,0,,"Gain 1 cent.",,,gain_cents,1,0,0,simple
+loot_soul_of_hope,Soul of Hope,LOOT,0,0,0,0,,"If you have 2 or less HP, gain a soul.",res://scripts/cards/effects/soul_of_hope.gd,,,0,0,0,medium
+treasure_sack_of_pennies,Sack of Pennies,TREASURE,6,0,0,0,,"Passive: at the start of your turn, gain 3 cents.",,turn_started,gain_cents,3,0,0,medium
+treasure_the_bible,The Bible,TREASURE,10,0,0,0,,"Use: deal 3 damage to target monster.",res://scripts/cards/effects/the_bible.gd,,,0,1,1,medium
+treasure_steven,Steven,TREASURE,6,0,0,1,,"Passive: your attack rolls gain +1.",,,,0,0,0,simple
+treasure_money_is_power,The Money = Power,TREASURE,8,0,0,0,,"Passive: your attack rolls gain +1 for every 4 cents you have.",res://scripts/cards/effects/money_is_power.gd,,,0,0,0,medium
+treasure_change_purse,Change Purse,TREASURE,5,0,0,0,,"Passive: when you play a card, gain 1 cent.",,card_played,gain_cents,1,0,0,medium
+treasure_crows_heart,Crow's Heart,TREASURE,4,0,0,0,,"Passive: when any player kills a monster, gain 1 cent.",,monster_killed,gain_cents,1,0,0,medium

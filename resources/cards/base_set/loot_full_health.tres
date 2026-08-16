@@ -1,0 +1,12 @@
+[gd_resource type="Resource" script_class="CardResource" format=3]
+
+[ext_resource type="Script" path="res://scripts/core/card_resource.gd" id="1_wcmm4"]
+
+[resource]
+script = ExtResource("1_wcmm4")
+id = "loot_full_health"
+display_name = "Full Health"
+type = 4
+text = "Gain 2 HP."
+simple_effect = "gain_hp"
+simple_effect_value = 2

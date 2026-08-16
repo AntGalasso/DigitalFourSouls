@@ -1,0 +1,12 @@
+[gd_resource type="Resource" script_class="CardResource" format=3]
+
+[ext_resource type="Script" path="res://scripts/core/card_resource.gd" id="1_dia6g"]
+
+[resource]
+script = ExtResource("1_dia6g")
+id = "treasure_steven"
+display_name = "Steven"
+type = 5
+cost_cents = 6
+text = "Passive: your attack rolls gain +1."
+roll_bonus = 1

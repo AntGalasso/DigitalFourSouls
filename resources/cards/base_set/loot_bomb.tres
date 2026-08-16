@@ -1,0 +1,12 @@
+[gd_resource type="Resource" script_class="CardResource" format=3]
+
+[ext_resource type="Script" path="res://scripts/core/card_resource.gd" id="1_qn7sk"]
+
+[resource]
+script = ExtResource("1_qn7sk")
+id = "loot_bomb"
+display_name = "Bomb"
+type = 4
+text = "Deal 2 damage to target monster."
+effect_script_path = "res://scripts/cards/effects/bomb.gd"
+needs_target = true

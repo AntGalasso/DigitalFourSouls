@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="CardResource" format=3]
+
+[ext_resource type="Script" path="res://scripts/core/card_resource.gd" id="1_m8g2b"]
+
+[resource]
+script = ExtResource("1_m8g2b")
+id = "treasure_change_purse"
+display_name = "Change Purse"
+type = 5
+cost_cents = 5
+text = "Passive: when you play a card, gain 1 cent."
+trigger_events = Array[String](["card_played"])
+simple_effect = "gain_cents"
+simple_effect_value = 1

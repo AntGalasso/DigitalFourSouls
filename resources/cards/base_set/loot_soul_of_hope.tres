@@ -1,0 +1,11 @@
+[gd_resource type="Resource" script_class="CardResource" format=3]
+
+[ext_resource type="Script" path="res://scripts/core/card_resource.gd" id="1_6rwbd"]
+
+[resource]
+script = ExtResource("1_6rwbd")
+id = "loot_soul_of_hope"
+display_name = "Soul of Hope"
+type = 4
+text = "If you have 2 or less HP, gain a soul."
+effect_script_path = "res://scripts/cards/effects/soul_of_hope.gd"
