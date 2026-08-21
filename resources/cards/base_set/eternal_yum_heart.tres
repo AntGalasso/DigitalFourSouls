@@ -1,0 +1,16 @@
+[gd_resource type="Resource" script_class="CardResource" format=3]
+
+[ext_resource type="Script" path="res://scripts/core/card_resource.gd" id="1_v6xaq"]
+
+[resource]
+script = ExtResource("1_v6xaq")
+id = "eternal_yum_heart"
+display_name = "Yum Heart"
+type = 2
+text = "Heal a player 1 HP. Healing at full HP permanently increases that player's max HP."
+needs_target = true
+is_eternal = true
+eternal_action = "heal_player"
+description = "Heal a player 1 HP. Healing at full HP permanently increases that player's max HP."
+activation_type = "activated_free"
+activation_cost = "tap"

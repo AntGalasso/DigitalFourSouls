@@ -10,3 +10,5 @@ type = 1
 die_value = 2
 hp = 2
 text = "Deals 2 damage to a random player when it deals damage."
+effect_trigger = "none"
+effect_description = "No special effect. Deals 2 damage to the attacker when the attack misses."

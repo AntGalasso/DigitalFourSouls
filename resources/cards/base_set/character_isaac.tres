@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="CardResource" format=3]
+
+[ext_resource type="Script" path="res://scripts/core/card_resource.gd" id="1_60xlp"]
+
+[resource]
+script = ExtResource("1_60xlp")
+id = "character_isaac"
+display_name = "Isaac"
+hp = 2
+text = "Character effect: play 1 extra loot card on any turn. Eternal item: D6 — reroll any die that has been rolled. Recharges at the start and end of Isaac's turn."
+character_effect = "play_loot"
+eternal_item_id = "eternal_d6"
+damage = 1

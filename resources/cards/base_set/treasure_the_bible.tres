@@ -12,3 +12,6 @@ text = "Use: deal 3 damage to target monster."
 effect_script_path = "res://scripts/cards/effects/the_bible.gd"
 needs_target = true
 playable = true
+description = "Deal 3 damage to a monster."
+activation_type = "activated_free"
+activation_cost = "tap"

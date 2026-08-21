@@ -1,0 +1,16 @@
+[gd_resource type="Resource" script_class="CardResource" format=3]
+
+[ext_resource type="Script" path="res://scripts/core/card_resource.gd" id="1_ruqjd"]
+
+[resource]
+script = ExtResource("1_ruqjd")
+id = "monster_monstro"
+display_name = "Monstro"
+type = 1
+die_value = 4
+hp = 4
+text = "BOSS. Deals 1 damage to a random player when it deals damage. Soul: Monstro."
+effect_trigger = "on_miss"
+effect_description = "When the player misses an attack roll against Monstro, they discard 1 loot card."
+is_boss = true
+soul_value = 2

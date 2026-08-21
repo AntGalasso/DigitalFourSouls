@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="CardResource" format=3]
+
+[ext_resource type="Script" path="res://scripts/core/card_resource.gd" id="1_lp7qe"]
+
+[resource]
+script = ExtResource("1_lp7qe")
+id = "character_judas"
+display_name = "Judas"
+hp = 2
+text = "Character effect: play 1 extra loot card on any turn. Eternal item: Belial Book — increase or decrease any die that has been rolled by 1. Recharges at the start and end of Judas's turn."
+character_effect = "play_loot"
+eternal_item_id = "eternal_belial_book"
+damage = 1

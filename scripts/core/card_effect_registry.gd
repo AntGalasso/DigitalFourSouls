@@ -72,6 +72,16 @@ func unregister_card(player_id: int, instance_id: String) -> void:
 		_unmount(effect)
 	_disconnect_connections(instance_id)
 
+## Removes the first owned copy of a given card (e.g. the death penalty picking
+## an item by card id): resolves its instance_id, then unregisters it.
+func unregister_card_by_card_id(player_id: int, card_id: String) -> void:
+	var owned: Dictionary = _owned.get(player_id, {})
+	for instance_id in owned.keys():
+		var card: CardResource = owned[instance_id]
+		if card != null and card.id == card_id:
+			unregister_card(player_id, instance_id)
+			return
+
 ## Registers a monster instance (drawn onto the table) so its on_attacked /
 ## on_killed hooks can be dispatched. Vanilla/data monsters are skipped.
 func register_monster(card: CardResource, instance_id: String) -> void:
@@ -135,6 +145,19 @@ func get_roll_bonus(player_id: int) -> int:
 		total += card.roll_bonus
 	for effect in _owned_effects.get(player_id, []):
 		total += effect.get_roll_bonus()
+	return total
+
+## Sum of attack-damage bonuses (MP07 G): static data (CardResource.damage_bonus)
+## plus scripted modifiers (CardEffect.get_damage_bonus). The combat resolver
+## ALWAYS computes hit damage as the character's base `damage` + this total —
+## never a hardcoded value.
+func get_damage(player_id: int) -> int:
+	var total := 0
+	var owned: Dictionary = _owned.get(player_id, {})
+	for card in owned.values():
+		total += card.damage_bonus
+	for effect in _owned_effects.get(player_id, []):
+		total += effect.get_damage_bonus()
 	return total
 
 func effect_count() -> int:

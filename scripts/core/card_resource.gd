@@ -25,3 +25,20 @@ enum CardType { CHARACTER, MONSTER, ITEM_ACTIVE, ITEM_PASSIVE, LOOT, TREASURE, S
 @export var roll_bonus: int = 0             # static +N to owner's attack rolls (data-driven modifier)
 @export var needs_target: bool = false      # played from hand: player must pick a monster target
 @export var playable: bool = false          # active-use treasure: can be USED from the items area
+@export var is_eternal: bool = false        # eternal item (cannot be lost to the death penalty)
+@export var eternal_action: String = ""     # "reroll_die" | "adjust_die" | "heal_player"
+@export var recharges_on_turn_end: bool = false  # eternal item also recharges at the end of the owner's turn
+@export var character_effect: String = ""   # character: "play_loot" (1 extra loot on any turn)
+@export var eternal_item_id: String = ""    # character: id of the eternal item card it owns
+
+## MP07 fields (rules-fidelity data, MP07 H/I/J/G):
+@export var damage: int = 0                 # characters: base attack damage (1)
+@export var damage_bonus: int = 0           # static +N to owner's attack damage (data modifier, G)
+@export var description: String = ""        # UI-readable effect description (H)
+@export var activation_type: String = ""    # "passive" | "activated_free" | "activated_paid" (H)
+@export var activation_cost: String = ""    # human-readable activation cost, e.g. "tap", "3¢" (H)
+@export var effect_trigger: String = ""     # monster: "none" | "on_roll" | "on_death" | "on_miss" (I)
+@export var effect_condition: String = ""   # monster: condition for the trigger, e.g. "roll == 1" (I)
+@export var effect_description: String = "" # monster: effect text (I), "" forbidden (explicit "none")
+@export var is_boss: bool = false           # boss: soul card on death, win-condition double count (J)
+@export var soul_value: int = 0             # boss: 1 or 2 souls, ONE soul card that counts twice (J)

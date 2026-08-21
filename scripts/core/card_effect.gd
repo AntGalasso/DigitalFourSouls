@@ -40,3 +40,9 @@ func on_event(_event_name: String, _payload: Dictionary) -> void:
 ## roll. Default 0 — override for conditional modifiers (e.g. based on cents).
 func get_roll_bonus() -> int:
 	return 0
+
+## Called by the registry when the owner's attack HITS: bonus added to the
+## damage dealt to the monster (MP07 G — the resolver always uses the
+## character's base damage + this bonus, never a hardcoded value).
+func get_damage_bonus() -> int:
+	return 0

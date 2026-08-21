@@ -11,3 +11,5 @@ die_value = 3
 hp = 4
 soul_reward = "red"
 text = "Deals 1 damage to a random player when it deals damage."
+effect_trigger = "none"
+effect_description = "No special effect. Deals 1 damage to the attacker when the attack misses."

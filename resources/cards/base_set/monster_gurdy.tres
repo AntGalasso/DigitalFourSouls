@@ -11,3 +11,6 @@ die_value = 3
 hp = 4
 soul_reward = "blue"
 text = "Deals 1 damage to a random player when it deals damage."
+effect_trigger = "on_roll"
+effect_condition = "roll == 1"
+effect_description = "If the attack roll is 1, Gurdy deals 1 extra damage to the attacking player."

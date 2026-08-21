@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="CardResource" format=3]
+
+[ext_resource type="Script" path="res://scripts/core/card_resource.gd" id="1_veyrs"]
+
+[resource]
+script = ExtResource("1_veyrs")
+id = "treasure_blood_clot"
+display_name = "Blood Clot"
+type = 5
+cost_cents = 10
+text = "Passive: your attacks deal +1 damage."
+damage_bonus = 1
+description = "Your attacks deal +1 damage."
+activation_type = "passive"

@@ -93,7 +93,7 @@ static func _apply_fields(card: Resource, row: Dictionary, type_map: Dictionary,
 	card.id = row.get("id", "")
 	card.display_name = row.get("display_name", "")
 	card.type = type_map[type_name]
-	for num_field in ["cost_cents", "die_value", "hp", "roll_bonus", "simple_effect_value", "needs_target", "playable"]:
+	for num_field in ["cost_cents", "die_value", "hp", "roll_bonus", "simple_effect_value", "needs_target", "playable", "is_eternal", "recharges_on_turn_end", "damage", "damage_bonus", "soul_value", "is_boss"]:
 		var raw: String = row.get(num_field, "")
 		if raw != "" and not raw.is_valid_int():
 			problems.append("field '%s' is not an integer ('%s')" % [num_field, raw])
@@ -104,6 +104,12 @@ static func _apply_fields(card: Resource, row: Dictionary, type_map: Dictionary,
 	card.roll_bonus = int(row.get("roll_bonus", ""))
 	card.needs_target = int(row.get("needs_target", "")) != 0
 	card.playable = int(row.get("playable", "")) != 0
+	card.is_eternal = int(row.get("is_eternal", "")) != 0
+	card.recharges_on_turn_end = int(row.get("recharges_on_turn_end", "")) != 0
+	card.damage = int(row.get("damage", ""))
+	card.damage_bonus = int(row.get("damage_bonus", ""))
+	card.soul_value = int(row.get("soul_value", ""))
+	card.is_boss = int(row.get("is_boss", "")) != 0
 	card.soul_reward = row.get("soul_reward", "")
 	card.text = row.get("text", "")
 	card.effect_script_path = row.get("effect_script_path", "")
@@ -116,6 +122,40 @@ static func _apply_fields(card: Resource, row: Dictionary, type_map: Dictionary,
 				card.trigger_events.append(trimmed)
 	card.simple_effect = row.get("simple_effect", "")
 	card.simple_effect_value = int(row.get("simple_effect_value", ""))
+	card.eternal_action = row.get("eternal_action", "")
+	card.character_effect = row.get("character_effect", "")
+	card.eternal_item_id = row.get("eternal_item_id", "")
+	card.description = row.get("description", "")
+	card.activation_type = row.get("activation_type", "")
+	card.activation_cost = row.get("activation_cost", "")
+	card.effect_trigger = row.get("effect_trigger", "")
+	card.effect_condition = row.get("effect_condition", "")
+	card.effect_description = row.get("effect_description", "")
+	# MP07 I: monsters must declare effect_trigger/effect_description EXPLICITLY
+	# ("none" is allowed; a missing field is not — the field must exist).
+	if type_name == "MONSTER":
+		if card.effect_trigger == "" or card.effect_description == "":
+			problems.append("monster needs effect_trigger and effect_description (explicit; use 'none' when it has no special effect)")
+			return false
+		if not ["none", "on_roll", "on_death", "on_miss"].has(card.effect_trigger):
+			problems.append("unknown monster effect_trigger '%s' (none|on_roll|on_death|on_miss)" % card.effect_trigger)
+			return false
+	# MP07 H: every item must carry a readable description, categorized in one
+	# of the three real activation types, with an explicit cost when paid.
+	if type_name == "TREASURE" or type_name == "ITEM_ACTIVE" or type_name == "ITEM_PASSIVE":
+		if card.description == "":
+			problems.append("item needs a description (MP07 H)")
+			return false
+		if not ["passive", "activated_free", "activated_paid"].has(card.activation_type):
+			problems.append("activation_type must be passive|activated_free|activated_paid ('%s')" % card.activation_type)
+			return false
+		if card.activation_type == "activated_paid" and card.activation_cost == "":
+			problems.append("activated_paid items need an explicit activation_cost (MP07 H)")
+			return false
+	# MP07 J: a boss always grants souls (soul_value >= 1)
+	if card.is_boss and card.soul_value < 1:
+		problems.append("is_boss requires soul_value >= 1")
+		return false
 	return true
 
 ## Minimal CSV parser: handles double-quoted fields and CRLF/LF line endings.

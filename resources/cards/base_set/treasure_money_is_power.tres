@@ -7,6 +7,8 @@ script = ExtResource("1_rbdft")
 id = "treasure_money_is_power"
 display_name = "The Money = Power"
 type = 5
-cost_cents = 8
+cost_cents = 10
 text = "Passive: your attack rolls gain +1 for every 4 cents you have."
 effect_script_path = "res://scripts/cards/effects/money_is_power.gd"
+description = "Your attack rolls gain +1 for every 4¢ you have."
+activation_type = "passive"

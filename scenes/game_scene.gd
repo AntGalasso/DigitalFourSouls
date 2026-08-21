@@ -1,31 +1,50 @@
 extends Control
-## Human hotseat game scene (Metaprompt 05, STEP 3-4). No art: Labels and
-## Buttons only. Drives the SAME MatchController as the self-play test — game
-## rules live there; this scene only renders state and translates clicks.
+## Human hotseat game scene (MP05 + MP06 + MP07). No art: Labels and Buttons only.
+## Drives the SAME MatchController as the self-play test — game rules live
+## there; this scene only renders state and translates clicks.
 ##
-## Hotseat flow: actions are available during the active player's turn; End
-## Turn shows a "pass the device" overlay; the next player starts on click.
-## Targeting is always an explicit choice: Attack or a needs_target card puts
-## the game in targeting mode, then the player clicks ONE of the 3 monster
-## slots. The shop shows every treasure at once.
+## MP07 hotseat flow: free action order — buy / attack / play loot in ANY
+## order, each limited per turn (1 buy, 1 attack, 1 loot + 1 with the
+## character effect) until "END TURN". Attacks are multi-roll sequences; every
+## stack item (attack declared, roll, damage, monster death) opens a PRIORITY
+## window in which ALL players respond in turn order starting from the active
+## player — loot play and eternal items are valid responses (F). STOP attack
+## no longer exists (D): an attack only ends when the monster or the player
+## dies. Eternal modifiers (D6 / Belial) apply ONLY while the roll is pending,
+## right after the roll and before it resolves (B). The shop has exactly 2
+## slots refilled from the treasure deck (E). Boss kills become soul cards
+## counting soul_value (Monstro = 2) towards the win condition at total 4 (J).
+## Turn alternation P1->P2 is now enforced — the pass-device overlay starts
+## the NEXT player, never the same one again (A).
 
 const CARD_DIR := "res://resources/cards/base_set/"
 const MatchControllerScript := preload("res://scripts/core/match_controller.gd")
+const MONSTER_SLOTS := MatchControllerScript.MONSTER_SLOTS
+const SHOP_SLOTS := MatchControllerScript.SHOP_SLOTS
 
 var _controller
 var _pending_action: String = ""    # "" | "attack" | "target:<hand index>" | "target_item"
+var _next_player := 1               # who starts after "Pass the device" (MP07 A fix)
+var _priority_open := false
+var _priority_player := -1
+var _priority_type := ""
 
 var _turn_label: Label
 var _hint_label: Label
 var _player_labels: Array = []      # [Label P1, Label P2]
-var _monster_buttons: Array = []    # [Button x3]
-var _shop_buttons: Array = []       # [Button per treasure]
+var _monster_buttons: Array = []    # [Button x MONSTER_SLOTS]
+var _shop_buttons: Array = []       # [Button x SHOP_SLOTS]
 var _hand_box: HBoxContainer
 var _items_box: HBoxContainer
+var _eternal_box: HBoxContainer
+var _attack_button: Button
+var _resolve_button: Button
 var _cancel_button: Button
+var _end_button: Button
 var _log_label: RichTextLabel
 var _overlay: Control
 var _overlay_label: Label
+var _overlay_box: VBoxContainer
 var _overlay_button: Button
 
 func _ready() -> void:
@@ -35,15 +54,23 @@ func _ready() -> void:
 	EventBus.cents_changed.connect(func(_p, _d, _t): _refresh())
 	EventBus.player_healed.connect(_on_player_healed)
 	EventBus.player_damaged.connect(_on_player_damaged)
-	EventBus.soul_gained.connect(func(_p, _s, _t): _refresh())
+	EventBus.hp_restored.connect(_on_hp_restored)
+	EventBus.monsters_restored.connect(_on_monsters_restored)
+	EventBus.souls_changed.connect(func(_p, _s, _t): _refresh())
+	EventBus.boss_defeated.connect(_on_boss_defeated)
+	EventBus.monster_attacked.connect(_on_monster_attacked_log)
 	EventBus.monster_damaged.connect(_on_monster_damaged_log)
 	EventBus.monster_killed.connect(_on_monster_killed_log)
+	EventBus.priority_pending.connect(_on_priority_pending)
+	EventBus.priority_closed.connect(_on_priority_closed)
+	EventBus.player_died.connect(_on_player_died)
+	EventBus.eternal_used.connect(func(_p, _i, _r): _refresh())
 	EventBus.card_drawn.connect(_on_card_drawn)
 	EventBus.item_bought.connect(func(_p, _id): _refresh())
 	EventBus.game_won.connect(_on_game_won)
 	_controller.begin_turn(0)
 	_refresh()
-	_log_line("Welcome to Four Souls (prototype, 26 cards). Buy = click a shop card. Attack = ATTACK, then click a monster. Cards in hand = click to play (pick a monster if asked). Use = active items. End Turn = pass the device.")
+	_log_line("Welcome to Four Souls (prototype, %d cards). Free order: buy, ATTACK, play loot, use items — then END TURN." % _controller.total_cards_at_setup)
 
 # --- UI construction ----------------------------------------------------------
 
@@ -84,7 +111,7 @@ func _build_ui() -> void:
 	root.add_child(_section_label("MONSTERS — click a slot to target it"))
 	var monsters_row := HBoxContainer.new()
 	monsters_row.add_theme_constant_override("separation", 8)
-	for i in range(3):
+	for i in range(MONSTER_SLOTS):
 		var button := Button.new()
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		button.pressed.connect(_on_monster_pressed.bind(i))
@@ -92,13 +119,13 @@ func _build_ui() -> void:
 		_monster_buttons.append(button)
 	root.add_child(monsters_row)
 
-	root.add_child(_section_label("SHOP — click a card to buy it"))
+	root.add_child(_section_label("SHOP — 2 slots, click a card to buy it"))
 	var shop_row := HBoxContainer.new()
 	shop_row.add_theme_constant_override("separation", 8)
-	for treasure in _controller.shop:
+	for i in range(SHOP_SLOTS):
 		var button := Button.new()
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		button.pressed.connect(_on_shop_pressed.bind(treasure))
+		button.pressed.connect(_on_shop_pressed.bind(i))
 		shop_row.add_child(button)
 		_shop_buttons.append(button)
 	root.add_child(shop_row)
@@ -113,19 +140,28 @@ func _build_ui() -> void:
 	_items_box.add_theme_constant_override("separation", 8)
 	root.add_child(_items_box)
 
+	root.add_child(_section_label("ETERNAL ITEM — your character's eternal item"))
+	_eternal_box = HBoxContainer.new()
+	_eternal_box.add_theme_constant_override("separation", 8)
+	root.add_child(_eternal_box)
+
 	var actions := HBoxContainer.new()
-	var attack_button := Button.new()
-	attack_button.text = "ATTACK (pick a monster)"
-	attack_button.pressed.connect(func(): _pending_action = "attack"; _refresh())
+	_attack_button = Button.new()
+	_attack_button.text = "ATTACK (pick a monster)"
+	_attack_button.pressed.connect(func(): _pending_action = "attack"; _refresh())
+	_resolve_button = Button.new()
+	_resolve_button.text = "RESOLVE roll"
+	_resolve_button.pressed.connect(_on_resolve_pressed)
 	_cancel_button = Button.new()
 	_cancel_button.text = "Cancel"
 	_cancel_button.pressed.connect(func(): _pending_action = ""; _refresh())
-	var end_button := Button.new()
-	end_button.text = "END TURN"
-	end_button.pressed.connect(_on_end_turn)
-	actions.add_child(attack_button)
+	_end_button = Button.new()
+	_end_button.text = "END TURN"
+	_end_button.pressed.connect(_on_end_turn)
+	actions.add_child(_attack_button)
+	actions.add_child(_resolve_button)
 	actions.add_child(_cancel_button)
-	actions.add_child(end_button)
+	actions.add_child(_end_button)
 	root.add_child(actions)
 
 	_log_label = RichTextLabel.new()
@@ -147,9 +183,12 @@ func _build_ui() -> void:
 	_overlay_label = Label.new()
 	_overlay_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_overlay_label.add_theme_font_size_override("font_size", 24)
+	_overlay_box = VBoxContainer.new()
+	_overlay_box.add_theme_constant_override("separation", 8)
 	_overlay_button = Button.new()
 	_overlay_button.pressed.connect(_on_overlay_button)
 	box.add_child(_overlay_label)
+	box.add_child(_overlay_box)
 	box.add_child(_overlay_button)
 	center.add_child(box)
 	add_child(_overlay)
@@ -167,13 +206,16 @@ func _on_monster_pressed(slot: int) -> void:
 	var instance_id: String = _controller.table_monsters[slot]["instance_id"]
 	if _pending_action == "attack":
 		_pending_action = ""
+		_refresh()
 		var monster: Dictionary = _controller.table_monsters[slot]
 		var monster_card: CardResource = monster["card"]
-		var result: Dictionary = _controller.attack(instance_id, GameState.current_player_index)
-		var bonus_text := ""
-		if result["bonus"] != 0:
-			bonus_text = " (+%d bonus)" % result["bonus"]
-		_log_line("attack %s: roll %d%s vs die %d -> %s" % [monster_card.display_name, result["roll"], bonus_text, monster_card.die_value, "HIT" if result["hit"] else "MISS"])
+		var result: Dictionary = await _controller.attack(instance_id, GameState.current_player_index)
+		match result.get("outcome", ""):
+			"killed":
+				_log_line("attack sequence: %s killed after %d rolls" % [monster_card.display_name, result["steps"]])
+			"player_died":
+				_log_line("attack sequence: you died after %d rolls" % result["steps"])
+		_refresh()
 	elif _pending_action.begins_with("target:"):
 		var hand_index := int(_pending_action.substr(7))
 		_pending_action = ""
@@ -183,14 +225,22 @@ func _on_monster_pressed(slot: int) -> void:
 		_play_active_item(instance_id)
 	_refresh()
 
-func _on_shop_pressed(treasure: CardResource) -> void:
-	if _controller.buy(treasure, GameState.current_player_index):
+func _on_shop_pressed(slot: int) -> void:
+	var treasure: CardResource = _controller.get_shop_card(slot)
+	if treasure != null and _controller.buy(slot, GameState.current_player_index):
 		_log_line("bought %s for %dc" % [treasure.display_name, treasure.cost_cents])
 	_refresh()
 
 func _on_hand_pressed(hand_index: int) -> void:
 	var card: CardResource = _card_from_hand(hand_index)
 	if card == null:
+		return
+	var pid := GameState.current_player_index
+	if _priority_open and _priority_player == pid:
+		var target := ""
+		if card.needs_target and not _controller.table_monsters.is_empty():
+			target = _controller.table_monsters[0]["instance_id"]
+		_respond({"action": "loot", "card_id": card.id, "target_id": target})
 		return
 	if card.needs_target and not _controller.table_monsters.is_empty():
 		_pending_action = "target:%d" % hand_index
@@ -206,12 +256,21 @@ func _play_hand_card(hand_index: int, target_id: String) -> void:
 	var payload := {}
 	if target_id != "":
 		payload = {"target_id": target_id}
+	if not _controller.play_loot(card, player_id, payload):
+		_log_line("can't play %s — loot limit reached (1 per turn + character effect)" % card.display_name)
+		return
 	_log_line("played %s" % card.display_name)
-	_controller.play_loot(card, player_id, payload)
 	GameState.players[player_id]["hand"].erase(card.id)
 	_refresh()
 
 func _on_items_use(card: CardResource) -> void:
+	var pid := GameState.current_player_index
+	if _priority_open and _priority_player == pid:
+		var target := ""
+		if card.needs_target and not _controller.table_monsters.is_empty():
+			target = _controller.table_monsters[0]["instance_id"]
+		_respond({"action": "loot", "card_id": card.id, "target_id": target})
+		return
 	if card.needs_target and not _controller.table_monsters.is_empty():
 		_pending_action = "target_item"
 		_refresh()
@@ -231,19 +290,151 @@ func _play_active_item(target_id: String) -> void:
 			_refresh()
 			return
 
+## RESOLVE / CONTINUE: closes the window when the ACTIVE player is asked.
+func _on_resolve_pressed() -> void:
+	_respond({"action": "resolve"})
+
+# --- Priority window (MP07 F) -------------------------------------------------
+
+## One stack item opened a priority window: if the ACTIVE player is asked the
+## inline buttons appear (RESOLVE/CONTINUE + hand + eternal); if the OTHER
+## player is asked, a pass-the-device overlay offers PASS + their loot and
+## eternal item.
+func _on_priority_pending(pid: int, stack_type: String, _payload: Dictionary) -> void:
+	_priority_open = true
+	_priority_player = pid
+	_priority_type = stack_type
+	if pid != GameState.current_player_index:
+		_show_priority_overlay(pid)
+	_refresh()
+
+func _on_priority_closed(_stack_type: String, _payload: Dictionary) -> void:
+	_priority_open = false
+	_priority_player = -1
+	_priority_type = ""
+	_overlay.visible = false
+	_refresh()
+
+func _respond(response: Dictionary) -> void:
+	if not _priority_open:
+		return
+	EventBus.priority_given.emit(_priority_player, response)
+
+func _show_priority_overlay(pid: int) -> void:
+	_overlay_label.text = "PRIORITY — P%d must respond" % (pid + 1)
+	_overlay_button.visible = false
+	for child in _overlay_box.get_children():
+		child.queue_free()
+	var pass_button := Button.new()
+	pass_button.text = "PASS"
+	pass_button.pressed.connect(_respond.bind({"action": "pass"}))
+	_overlay_box.add_child(pass_button)
+	_render_priority_eternal(pid)
+	_render_priority_hand(pid)
+	_overlay.visible = true
+
+## The other player's eternal item, gated on the pending roll (MP07 B): D6 /
+## Belial only while a roll is PENDING on the stack — never before, never
+## after. Yum Heart heals anytime (self-heal in the window).
+func _render_priority_eternal(pid: int) -> void:
+	var player := GameState.players[pid]
+	var item: CardResource = _controller.card_resource(player["eternal_item_id"])
+	if item == null:
+		return
+	var pending: bool = not _controller.get_pending_roll().is_empty()
+	match item.eternal_action:
+		"reroll_die":
+			var d6 := Button.new()
+			d6.text = "USE %s (reroll the pending roll)" % item.display_name
+			d6.disabled = player["eternal_used"] or not pending
+			d6.pressed.connect(_respond.bind({"action": "eternal", "payload": {}}))
+			_overlay_box.add_child(d6)
+		"adjust_die":
+			var plus := Button.new()
+			plus.text = "%s +1" % item.display_name
+			plus.disabled = player["eternal_used"] or not pending
+			plus.pressed.connect(_respond.bind({"action": "eternal", "payload": {"delta": 1}}))
+			var minus := Button.new()
+			minus.text = "%s -1" % item.display_name
+			minus.disabled = player["eternal_used"] or not pending
+			minus.pressed.connect(_respond.bind({"action": "eternal", "payload": {"delta": -1}}))
+			_overlay_box.add_child(plus)
+			_overlay_box.add_child(minus)
+		"heal_player":
+			var yum := Button.new()
+			yum.text = "USE %s (heal P%d 1 HP)" % [item.display_name, pid + 1]
+			yum.disabled = player["eternal_used"]
+			yum.pressed.connect(_respond.bind({"action": "eternal", "payload": {"target_id": pid}}))
+			_overlay_box.add_child(yum)
+
+## The other player's hand, played as a priority response (their turn loot
+## limit and character effect still apply in the engine).
+func _render_priority_hand(pid: int) -> void:
+	for card_id in GameState.players[pid]["hand"]:
+		var card: CardResource = _controller.card_resource(card_id)
+		if card == null:
+			continue
+		var target := ""
+		if card.needs_target and not _controller.table_monsters.is_empty():
+			target = _controller.table_monsters[0]["instance_id"]
+		var button := Button.new()
+		button.text = "PLAY %s" % card.display_name
+		button.pressed.connect(_respond.bind({"action": "loot", "card_id": card_id, "target_id": target}))
+		_overlay_box.add_child(button)
+
+# --- Eternal items (MP06 g) ---------------------------------------------------
+
+func _on_eternal_use(payload: Dictionary) -> void:
+	var pid := GameState.current_player_index
+	if _priority_open and _priority_player == pid:
+		_respond({"action": "eternal", "payload": payload})
+		return
+	var result: Dictionary = _controller.use_eternal_item(pid, payload)
+	if not result.get("ok", false):
+		_log_line("eternal item unavailable: %s" % result.get("reason", "?"))
+		return
+	var item_name: String = _controller.card_resource(GameState.players[pid]["eternal_item_id"]).display_name
+	if result.has("new_roll") and result.has("old_roll"):
+		_log_line("%s rerolls %d -> %d" % [item_name, result["old_roll"], result["new_roll"]])
+	elif result.has("new_roll"):
+		_log_line("%s adjusts the roll to %d" % [item_name, result["new_roll"]])
+	elif result.has("target_id"):
+		_log_line("%s heals P%d for 1 HP" % [item_name, result["target_id"] + 1])
+	_refresh()
+
+## Turn alternation fix (MP07 A): remember who starts next, and let the
+## pass-device overlay begin THAT player — never the same one again.
 func _on_end_turn() -> void:
-	var next: int = _controller.end_turn()
-	_show_overlay("Pass the device to P%d" % (next + 1), "Start P%d's turn" % (next + 1))
+	_next_player = _controller.end_turn()
+	_show_overlay("Pass the device to P%d" % (_next_player + 1), "Start P%d's turn" % (_next_player + 1))
 
 func _on_overlay_button() -> void:
-	var pid := GameState.current_player_index
+	var pid := _next_player
 	_controller.begin_turn(pid)
+	_next_player = (pid + 1) % GameState.players.size()
 	_overlay.visible = false
 	_refresh()
 
 func _show_overlay(text: String, button_text: String) -> void:
 	_overlay_label.text = text
 	_overlay_button.text = button_text
+	_overlay_button.visible = true
+	for child in _overlay_box.get_children():
+		child.queue_free()
+	_overlay.visible = true
+
+## Choice overlay (e.g. "choose an item to lose"): replaces the single button
+## with one button per option; the single button is hidden.
+func _show_choice_overlay(text: String, options: Array, on_choose: Callable) -> void:
+	_overlay_label.text = text
+	_overlay_button.visible = false
+	for child in _overlay_box.get_children():
+		child.queue_free()
+	for option in options:
+		var button := Button.new()
+		button.text = str(option)
+		button.pressed.connect(on_choose.bind(option))
+		_overlay_box.add_child(button)
 	_overlay.visible = true
 
 # --- State rendering ----------------------------------------------------------
@@ -254,46 +445,75 @@ func _refresh() -> void:
 	for i in range(2):
 		var p := GameState.players[i]
 		var active := " (your turn)" if i == pid else ""
-		_player_labels[i].text = "P%d%s\n  HP %d   cents %d   souls %s\n  items: %s" % [
-			i + 1, active, p["hp"], p["cents"], str(p["souls"]), str(p["items_passive"])]
-	for slot in range(3):
+		var char_name: String = p["character_id"].trim_prefix("character_").capitalize()
+		var char_state := "effect ready" if not p["character_effect_used"] else "effect used"
+		_player_labels[i].text = "P%d%s — %s\n  HP %d/%d   cents %d   souls %s (value %d)\n  items: %s\n  %s (eternal: %s)" % [
+			i + 1, active, char_name, p["hp"], p["max_hp"], p["cents"], str(p["souls"]),
+			GameState.soul_total(i), str(p["items_passive"]), char_state, p["eternal_item_id"].trim_prefix("eternal_")]
+	for slot in range(MONSTER_SLOTS):
 		var button: Button = _monster_buttons[slot]
 		if slot < _controller.table_monsters.size():
 			var monster: Dictionary = _controller.table_monsters[slot]
 			var monster_card: CardResource = monster["card"]
-			button.text = "%s\n die %d — hp %d" % [monster_card.display_name, monster_card.die_value, monster["hp"]]
-			button.disabled = false
+			var boss_tag := " — BOSS" if monster_card.is_boss else ""
+			button.text = "%s%s\n die %d — hp %d" % [monster_card.display_name, boss_tag, monster_card.die_value, monster["hp"]]
+			button.tooltip_text = monster_card.effect_description
+			button.disabled = _priority_open
 		else:
 			button.text = "empty slot"
 			button.disabled = true
-	for i in range(_shop_buttons.size()):
+	var player := GameState.players[pid]
+	var buy_limit: bool = player["buys_used"] >= 1
+	for i in range(SHOP_SLOTS):
 		var button: Button = _shop_buttons[i]
-		var treasure: CardResource = _controller.shop[i]
-		if _controller.is_bought(treasure.id, pid):
+		var treasure: CardResource = _controller.get_shop_card(i)
+		if treasure == null:
+			button.text = "empty shop"
+			button.disabled = true
+		elif _priority_open:
+			button.text = "%s" % treasure.display_name
+			button.disabled = true
+		elif buy_limit:
+			button.text = "%s — buy limit used" % treasure.display_name
+			button.disabled = true
+		elif _controller.is_bought(treasure.id, pid):
 			button.text = "%s — bought" % treasure.display_name
 			button.disabled = true
-		elif GameState.players[pid]["cents"] < treasure.cost_cents:
+		elif player["cents"] < treasure.cost_cents:
 			button.text = "%s (%dc) — too poor" % [treasure.display_name, treasure.cost_cents]
 			button.disabled = true
 		else:
 			button.text = "%s (%dc)" % [treasure.display_name, treasure.cost_cents]
 			button.disabled = false
+		button.tooltip_text = treasure.description
 	_rebuild_hand()
 	_rebuild_items()
+	_rebuild_eternal()
 	_update_hint()
-	_cancel_button.disabled = _pending_action == ""
+	_attack_button.disabled = _priority_open or player["attacks_used"] >= 1
+	_resolve_button.visible = _priority_open and _priority_player == pid
+	if _priority_open and _priority_player == pid:
+		_resolve_button.text = "RESOLVE roll" if _priority_type == "roll" else "CONTINUE"
+	_cancel_button.disabled = _pending_action == "" or _priority_open
+	_end_button.disabled = _priority_open
 
 func _rebuild_hand() -> void:
 	for child in _hand_box.get_children():
 		child.queue_free()
-	var hand: Array = GameState.players[GameState.current_player_index]["hand"]
+	var player := GameState.players[GameState.current_player_index]
+	var loot_limit: bool = player["loot_played"] >= 1 and player["character_effect_used"]
+	var hand: Array = player["hand"]
 	for i in range(hand.size()):
 		var card: CardResource = _controller.card_resource(hand[i])
 		if card == null:
 			continue
 		var button := Button.new()
 		button.text = "%s — %s" % [card.display_name, _card_summary(card)]
+		button.tooltip_text = card.text
 		button.pressed.connect(_on_hand_pressed.bind(i))
+		if loot_limit:
+			button.text += " (limit)"
+			button.disabled = true
 		_hand_box.add_child(button)
 
 func _rebuild_items() -> void:
@@ -305,13 +525,64 @@ func _rebuild_items() -> void:
 		if card != null and card.playable:
 			var button := Button.new()
 			button.text = "USE %s — %s" % [card.display_name, _card_summary(card)]
+			button.tooltip_text = card.description
 			button.pressed.connect(_on_items_use.bind(card))
 			_items_box.add_child(button)
 
+func _rebuild_eternal() -> void:
+	for child in _eternal_box.get_children():
+		child.queue_free()
+	var pid := GameState.current_player_index
+	var player := GameState.players[pid]
+	var item: CardResource = _controller.card_resource(player["eternal_item_id"])
+	if item == null:
+		return
+	var used: bool = player["eternal_used"]
+	## MP07 B: D6 / Belial only act while the roll is PENDING — enabled only
+	## inside the priority window with a pending roll on the stack.
+	var roll_pending: bool = _priority_open and not _controller.get_pending_roll().is_empty()
+	match item.eternal_action:
+		"reroll_die":
+			var d6 := Button.new()
+			d6.text = "USE %s (reroll the pending roll)" % item.display_name
+			d6.disabled = used or not roll_pending
+			d6.pressed.connect(_on_eternal_use.bind({}))
+			_eternal_box.add_child(d6)
+		"adjust_die":
+			var plus := Button.new()
+			plus.text = "%s +1" % item.display_name
+			plus.disabled = used or not roll_pending
+			plus.pressed.connect(_on_eternal_use.bind({"delta": 1}))
+			var minus := Button.new()
+			minus.text = "%s -1" % item.display_name
+			minus.disabled = used or not roll_pending
+			minus.pressed.connect(_on_eternal_use.bind({"delta": -1}))
+			_eternal_box.add_child(plus)
+			_eternal_box.add_child(minus)
+		"heal_player":
+			var yum := Button.new()
+			yum.text = "USE %s (heal a player 1 HP)" % item.display_name
+			yum.disabled = used
+			yum.pressed.connect(_on_yum_heart)
+			_eternal_box.add_child(yum)
+	if used:
+		var note := Label.new()
+		note.text = " (recharging%s)" % (" — recharges at the end of your turn" if item.recharges_on_turn_end else "")
+		_eternal_box.add_child(note)
+
+func _on_yum_heart() -> void:
+	_show_choice_overlay("Yum Heart — heal which player?", [0, 1], func(choice): _on_eternal_use({"target_id": choice}))
+
 func _update_hint() -> void:
+	if _priority_open:
+		if _priority_player == GameState.current_player_index:
+			_hint_label.text = "Priority window (%s) — play loot / use your eternal item, or RESOLVE" % _priority_type
+		else:
+			_hint_label.text = "Priority window (%s) — P%d must respond: pass the device" % [_priority_type, _priority_player + 1]
+		return
 	match _pending_action:
 		"":
-			_hint_label.text = "Choose: buy, ATTACK, play a card, or end turn."
+			_hint_label.text = "Choose: buy, ATTACK, play a card, use an item, or end turn."
 		"attack":
 			_hint_label.text = "Click the monster you want to attack."
 		"target_item":
@@ -335,17 +606,57 @@ func _card_from_hand(hand_index: int) -> CardResource:
 func _log_line(line: String) -> void:
 	_log_label.append_text("> " + line + "\n")
 
+## The roll line is logged HERE, from monster_attacked, which the controller
+## emits AFTER the priority window resolved the pending roll and BEFORE
+## applying damage — so the log order is always roll -> damage -> kill.
+func _on_monster_attacked_log(_player_id: int, instance_id: String, roll: int, bonus: int, die_value: int) -> void:
+	for monster in _controller.table_monsters:
+		if monster["instance_id"] == instance_id:
+			var bonus_text := (" (+%d bonus)" % bonus) if bonus != 0 else ""
+			_log_line("attack %s: roll %d%s vs die %d -> %s" % [
+				monster["card"].display_name, roll, bonus_text, die_value,
+				"HIT" if roll >= die_value else "MISS"])
+			break
+	_refresh()
+
 func _on_player_healed(player_id: int, amount: int, _new_total: int) -> void:
 	_log_line("P%d gains %d HP" % [player_id + 1, amount])
+	_refresh()
+
+func _on_hp_restored(player_id: int, new_total: int) -> void:
+	_log_line("end of turn: P%d restores to full HP (%d)" % [player_id + 1, new_total])
+	_refresh()
+
+func _on_monsters_restored() -> void:
+	_log_line("end of turn: all monsters restore to full HP")
 	_refresh()
 
 func _on_player_damaged(player_id: int, amount: int, _source: String) -> void:
 	_log_line("P%d takes %d damage" % [player_id + 1, amount])
 	_refresh()
-	if GameState.players[player_id]["hp"] <= 0:
-		_show_overlay("P%d has died — match over" % (player_id + 1), "Restart")
-		_overlay_button.pressed.disconnect(_on_overlay_button)
-		_overlay_button.pressed.connect(func(): get_tree().reload_current_scene())
+
+## Death is a penalty, not a match over (MP06 f): the controller already
+## applied the loot/cent loss; the player chooses one item to lose here. The
+## next player starts after the penalty (MP07 A).
+func _on_player_died(player_id: int, penalty: Dictionary) -> void:
+	var losses: Array = []
+	if penalty.get("cents_lost", false):
+		losses.append("1 cent")
+	if penalty.get("loot_lost", "") != "":
+		losses.append("1 loot")
+	_log_line("P%d died — loses %s%s" % [player_id + 1, ", ".join(losses), " and 1 item" if not penalty.get("item_options", []).is_empty() else ""])
+	_next_player = (player_id + 1) % GameState.players.size()
+	var options: Array = penalty.get("item_options", [])
+	if options.is_empty():
+		EventBus.player_death_resolved.emit(player_id, "")
+		_show_overlay("P%d died — turn over" % (player_id + 1), "Pass to P%d" % (_next_player + 1))
+	else:
+		_show_choice_overlay("Choose an item to lose to the death penalty", options, func(choice): _on_death_choice(player_id, choice))
+
+func _on_death_choice(player_id: int, choice: String) -> void:
+	_log_line("P%d discards %s" % [player_id + 1, choice])
+	EventBus.player_death_resolved.emit(player_id, choice)
+	_show_overlay("P%d died — turn over" % (player_id + 1), "Pass to P%d" % (_next_player + 1))
 
 func _on_monster_damaged_log(instance_id: String, amount: int) -> void:
 	for monster in _controller.table_monsters:
@@ -357,9 +668,16 @@ func _on_monster_damaged_log(instance_id: String, amount: int) -> void:
 func _on_monster_killed_log(_player_id: int, _instance_id: String, rewards: Dictionary) -> void:
 	_log_line("%s killed!" % _controller.last_killed_monster)
 	if rewards.has("soul"):
-		_log_line("P%d gains a %s soul" % [_player_id + 1, rewards["soul"]])
+		_log_line("P%d gains a %s soul (value %d)" % [_player_id + 1, rewards["soul"], rewards.get("soul_value", 1)])
 	if rewards.has("cents"):
 		_log_line("P%d gains %d cent" % [_player_id + 1, rewards["cents"]])
+	_refresh()
+
+## MP07 J: a boss kill is a milestone — one soul card worth soul_value (2).
+func _on_boss_defeated(player_id: int, monster_card_id: String, soul_value: int) -> void:
+	var card: CardResource = _controller.card_resource(monster_card_id)
+	var name: String = card.display_name if card != null else monster_card_id
+	_log_line(">>> BOSS SCONFITTO: %s — P%d gains a soul worth %d <<<" % [name, player_id + 1, soul_value])
 	_refresh()
 
 func _on_card_drawn(player_id: int, card_id: String, _deck: String) -> void:
@@ -369,7 +687,10 @@ func _on_card_drawn(player_id: int, card_id: String, _deck: String) -> void:
 	_refresh()
 
 func _on_game_won(player_id: int) -> void:
-	_show_overlay("P%d wins with 4 souls!" % (player_id + 1), "Restart")
+	var souls: String = str(GameState.players[player_id]["souls"])
+	_show_overlay("P%d wins! Souls: %s (total value 4)" % [player_id + 1, souls], "Restart")
 	_overlay_button.pressed.disconnect(_on_overlay_button)
-	_overlay_button.pressed.connect(func(): get_tree().reload_current_scene())
+	_overlay_button.pressed.connect(_on_game_won_restart)
 
+func _on_game_won_restart() -> void:
+	get_tree().reload_current_scene()

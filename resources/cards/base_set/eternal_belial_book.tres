@@ -1,0 +1,17 @@
+[gd_resource type="Resource" script_class="CardResource" format=3]
+
+[ext_resource type="Script" path="res://scripts/core/card_resource.gd" id="1_k0k3i"]
+
+[resource]
+script = ExtResource("1_k0k3i")
+id = "eternal_belial_book"
+display_name = "Belial Book"
+type = 2
+text = "Increase or decrease any die that has been rolled by 1. Recharges at the start and end of Judas's turn."
+needs_target = true
+is_eternal = true
+eternal_action = "adjust_die"
+recharges_on_turn_end = true
+description = "Increase or decrease any die that has been rolled by 1."
+activation_type = "activated_free"
+activation_cost = "tap"
