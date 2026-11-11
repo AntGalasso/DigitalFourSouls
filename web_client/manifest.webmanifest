@@ -1,0 +1,14 @@
+{
+  "name": "Four Souls — Telefono",
+  "short_name": "Four Souls",
+  "description": "Controller per il tavolo Four Souls Digital (server Godot sul PC)",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#14121c",
+  "theme_color": "#14121c",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

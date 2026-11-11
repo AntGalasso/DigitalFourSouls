@@ -23,6 +23,8 @@ extends Control
 const CARD_DIR := "res://resources/cards/base_set/"
 const SessionScript := preload("res://scripts/core/match_session.gd")
 const Protocol := preload("res://scripts/core/match_protocol.gd")
+const NetServerScript := preload("res://scripts/net/net_server.gd")
+const TableViewScript := preload("res://scripts/net/table_view.gd")
 
 const DISPLAY_MONSTER_SLOTS := 4
 const DISPLAY_SHOP_SLOTS := 2
@@ -61,11 +63,41 @@ var _overlay_box: VBoxContainer
 var _overlay_button: Button
 
 func _ready() -> void:
+	# M3: `--host` turns the PC into the passive TABLE + network server, with the
+	# phones as controllers. Without it this is the local hotseat client.
+	if _host_mode_requested():
+		_build_host_screen()
+		return
 	_build_ui()
 	_session = SessionScript.new()
 	_session.message.connect(_on_message)
 	_session.start(2, Rng.rng.randi())
 	_log_line("Four Souls — authoritative session. Click a monster to attack, a card to play.")
+
+func _host_mode_requested() -> bool:
+	return OS.get_cmdline_user_args().has("--host") or OS.get_cmdline_user_args().has("host")
+
+## PC table mode: session + WebSocket/HTTP server + the passive table screen.
+## The PC itself never shows a hand (the table view uses snapshot_for(-1)).
+func _build_host_screen() -> void:
+	var args: PackedStringArray = OS.get_cmdline_user_args()
+	var ws_port: int = 8787
+	var http_port: int = 8788
+	for i in range(args.size()):
+		if args[i] == "--port" and i + 1 < args.size():
+			ws_port = int(args[i + 1])
+		elif args[i] == "--http" and i + 1 < args.size():
+			http_port = int(args[i + 1])
+	var host_session = SessionScript.new()
+	var net = NetServerScript.new()
+	add_child(net)
+	net.configure(host_session)
+	host_session.start(2, Rng.rng.randi())
+	if not net.start(ws_port, http_port):
+		Log.error("game_scene: the network server could not start (port busy?)")
+	var table = TableViewScript.new()
+	add_child(table)
+	table.setup(host_session, net)
 
 # --- UI construction ----------------------------------------------------------
 

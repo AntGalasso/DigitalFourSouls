@@ -2,7 +2,20 @@
 
 > Fonte di verità sullo stato del progetto. Aggiornato alla fine di ogni
 > metaprompt (istruzione permanente: sezione "Project status" in CLAUDE.md).
-> Ultimo aggiornamento: **Milestone 2 — protocollo e client passivo**
+> Ultimo aggiornamento: **Milestone 3 — server WebSocket + PWA + tavolo**
+> (2026-11-11): trasporto **RFC 6455 reale** (`TCPServer` +
+> `WebSocketPeer.accept_stream`, frame testo = JSON del protocollo M2) con
+> posti, `reconnect_token` persistito e riconnessione che rimanda snapshot +
+> richiesta pendente; **host statico integrato** sulla porta HTTP adiacente
+> (8788) che serve la PWA, quindi zero runtime esterni in LAN; modalità
+> **Tavolo Host** (`game_scene.tscn -- --host`) che rende SOLO
+> `snapshot_for(-1)` (nessuna mano a schermo) con URL LAN, stato posti, tavolo,
+> pila e log; client **PWA** mobile-first in `web_client/` (lobby, mano,
+> priorità, bersagli, morte) che non calcola nessuna regola; gate di rete
+> headless con due client veri. Rete **18/18**, suite **29/29**, canary UI
+> **7/7**.
+>
+> Precedente: **Milestone 2 — protocollo e client passivo**
 > (2026-11-11): **pila corretta** (un giro di pass risolve UNA sola entry,
 > `resolve_one()`, con nuova finestra se resta qualcosa sotto; la Loot in
 > risposta va sulla pila invece di essere atomica); protocollo di dati puri
@@ -47,6 +60,10 @@
 | **MatchProtocol (M2)** | `scripts/core/match_protocol.gd` | fatto | vocabolario puro client↔server: 8 comandi (`PLAY_LOOT`, `ACTIVATE_ITEM`, `DECLARE_ATTACK`, `BUY_SHOP`, `PASS_PRIORITY`, `SELECT_TARGET`, `CHOOSE_DEATH_PENALTY`, `END_TURN`) + 5 messaggi (`STATE_SNAPSHOT`, `PRIORITY_REQUEST`, `TARGET_REQUEST`, `DEATH_PENALTY_REQUEST`, `DOMAIN_EVENT`); `validation_error()`/`is_pure()`/`to_wire()`/`from_wire()`; nessun Object/Resource sul confine (STEP AF) |
 | **CommandDriver (M2)** | `scripts/core/drivers/command_driver.gd` | fatto | trasporto a comandi del `MatchDriver`: emette i messaggi del protocollo e accetta solo risposte con `request_id` E `player_id` della richiesta aperta; traduce il comando nella forma che il motore si aspetta. In M3 il socket si innesta qui |
 | **MatchSession (M2)** | `scripts/core/match_session.gd` | fatto | server in-process: valida i comandi, li esegue sul `MatchController`, emette `STATE_SNAPSHOT` con la legalità calcolata dal server (`ui_actions`), chiede il bersaglio con `TARGET_REQUEST`, filtra gli eventi privati (carte pescate) e avvia il turno successivo dopo `END_TURN` o dopo una morte |
+| **NetServer (M3)** | `scripts/net/net_server.gd` | fatto | server WebSocket RFC 6455 su `TCPServer` + `WebSocketPeer.accept_stream` (niente `WebSocketMultiplayerPeer`: il browser usa `new WebSocket()`), posti con `JOIN`/`reconnect_token` (persistito in `user://seats.json`), identità = posto (il `player_id` inviato dal client viene sovrascritto), snapshot per viewer, prompt pendente al reconnect, host HTTP statico per la PWA |
+| **Tavolo Host (M3)** | `scripts/net/table_view.gd`, `game_scene.gd` con `-- --host` | fatto | modalità PC passiva: `snapshot_for(-1)` (nessuna mano), URL LAN grande, stato dei posti, mostri/negozio, pila con tiro pendente, conteggi mazzi, log eventi filtrato. L'hotseat resta il default senza `--host` |
+| **PWA telefoni (M3)** | `web_client/index.html`, `app.js`, `style.css`, `manifest.webmanifest` | fatto | mobile-first, zero build: lobby/join+token, plancia e mano con legalità del server, modale priorità con azioni legali, selettore bersagli, morte a due passi. Connessione a `ws://<host>:<ws_port>` da `/config.json`, riconnessione con backoff |
+| **Gate di rete (M3)** | `scenes/net_test.gd` + `.tscn`, `run_net_test.bat` | fatto | end-to-end headless: server vero su 127.0.0.1, HTTP/PWA, 2 client WebSocket, join, privacy mano, `TARGET_REQUEST`, finestra di priorità con azioni legali, anti-spoof, reconnect con token |
 | **EventStack (MP07/M1/M2)** | `scripts/core/event_stack.gd` | fatto | coda LIFO tipizzata: `pending_roll` (r#), `pending_effect` (e#), `modifier` (m#); **`resolve_one()`** risolve UNA sola entry, quella in cima (Comprehensive Rules: un giro di pass = un oggetto). Se resta qualcosa il controller riapre la finestra prima di risolverla; guardia anti-loop nel controller |
 | CardEffect (base scripted) | `scripts/core/card_effect.gd` | fatto | hook on_play/on_attacked/on_killed/on_event/get_roll_bonus/get_damage_bonus |
 | CardEffectRegistry | `scripts/core/card_effect_registry.gd` | fatto | chiavi per instance_id; dispatcher policy (attivo primo, orario, ordine registrazione); switch simple_effect; unmount lifecycle |
@@ -124,6 +141,22 @@ condividono ancora un solo processo (socket in M3).
 Totale: **29/29 PASS**. Exit code 1 se anche uno fallisce; riepilogo finale = termometro.
 Canary separata della UI (`scenes/ui_drive_test.tscn`, client passivo): 7/7 PASS — turno P1, passaggio dispositivo, turno P2 fino alla morte completa (scelta Loot + oggetto) e ripresa del turno.
 
+### Gate di rete M3 (`scenes/net_test.tscn`, `run_net_test.bat`) — **18/18 PASS**
+
+| Verifica | Nota |
+|---|---|
+| server WebSocket + HTTP su 127.0.0.1 | porte effimere, nessuna dipendenza esterna |
+| HTTP serve la PWA e `/config.json` | shell HTML + porta WS annunciata |
+| due client `WebSocketPeer` fanno JOIN | P1→posto 0, P2→posto 1, token ≥ 16 byte |
+| il join manda subito lo snapshot | nessuna schermata vuota |
+| privacy sulla rete | P1 riceve solo `hand_count` di P2; P2 vede la propria mano |
+| `PLAY_LOOT` senza bersaglio | il server risponde `TARGET_REQUEST` con i mostri |
+| `SELECT_TARGET` completa il comando | il Bomb entra in pila e risolve |
+| finestra di priorità via socket | arriva a P2 con le `legal_actions` del server; P1 (senza risposte) non viene interrogato |
+| `PASS_PRIORITY` chiude la finestra | il Bomb risolve (hp 5 → 3) e la carta esce dalla mano |
+| `player_id` falsificato | sovrascritto dal posto → `ERROR not_your_turn` |
+| riconnessione col token | stesso `player_id` + snapshot immediato |
+
 ## 6. Decisioni architetturali
 
 - **Chiuso in MP07 (stack build):** (a) modifier generici sul tipo `pending_roll`, non casi speciali; (b) Belial applicato subito, D6 alla risoluzione (fedele alle due sequenze esempio); (c) loot in risposta = atomico senza nested window (**superato in M2**: ora è un `pending_effect` sulla pila, risolto con il giro di pass successivo); (d) `reset_combat_state` unico punto di riabilitazione ATTACK, chiamato anche nel path morte; (e) **auto-pass** per i giocatori senza risposte disponibili nella finestra (fedele al testo "finestra visibile a tutti i giocatori con item/loot disponibili").
@@ -132,4 +165,5 @@ Canary separata della UI (`scenes/ui_drive_test.tscn`, client passivo): 7/7 PASS
 - **Corretto in M2 (Comprehensive Rules):** un giro di pass risolve **una sola** entry (top), non un blocco; se resta qualcosa si riapre la finestra prima di risolverla. La Loot in risposta è un `pending_effect` sulla pila, non più atomica: era l'unica cosa che impediva il caso "pesco in risposta e gioco la carta appena pescata".
 - **Aggiunto in M2:** protocollo puro (`match_protocol.gd`), `MatchSession` come server in-process (validazione, `TARGET_REQUEST`, legalità calcolata dal server in `ui_actions()`, eventi privati filtrati, avvio del turno successivo dopo `END_TURN`/morte), `CommandDriver`, e `game_scene.gd` ridotta a client passivo. La canary copre anche la morte a due passi.
 - **Aperte:** TriggerEngine per `effect_trigger` dei mostri (M4); cap HP 6; curse; ordine di scelta tra effetti simultanei; GUT (rinviato, la suite headless resta il cancello).
-- **Prossimo (M3):** socket reale al posto di `message_sink`/`submit_command` (stesso protocollo, stesso `CommandDriver`), PWA dei telefoni, riconnessione dal `to_dict()`; nessuna modifica alle regole prevista.
+- **Aggiunto in M3:** server WebSocket RFC 6455 nativo (`scripts/net/net_server.gd`) con posti e token di riconnessione, host statico integrato per la PWA, modalità Tavolo Host (`-- --host`, solo `snapshot_for(-1)`), client PWA `web_client/` e gate di rete headless con due client veri. `MatchSession` non è cambiata nelle regole: sono solo nati `snapshot_message()` e `pending_prompt()`.
+- **Prossimo (M4):** TriggerEngine per gli `effect_trigger` dei mostri, poi contenuto (altre carte) e rifiniture; eventuale TLS/WSS e limite dei tentativi per il token sono fuori dal perimetro LAN casalingo.

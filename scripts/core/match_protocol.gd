@@ -42,6 +42,9 @@ const CMD_SELECT_TARGET := "SELECT_TARGET"
 const CMD_CHOOSE_DEATH_PENALTY := "CHOOSE_DEATH_PENALTY"
 ## End the current turn (the server runs the ending phase and starts the next).
 const CMD_END_TURN := "END_TURN"
+## Lobby (M3): take a seat, or resume one with the reconnect token saved on the
+## phone. payload: {seat: int (-1 = first free), token: String}
+const CMD_JOIN := "JOIN"
 
 # --- server -> client ---------------------------------------------------------
 
@@ -56,6 +59,13 @@ const MSG_TARGET_REQUEST := "TARGET_REQUEST"
 const MSG_DEATH_PENALTY_REQUEST := "DEATH_PENALTY_REQUEST"
 ## Something happened in the game world (log/clients): card drawn, soul gained…
 const MSG_DOMAIN_EVENT := "DOMAIN_EVENT"
+## Lobby answers (M3).
+const MSG_JOIN_OK := "JOIN_OK"             # {player_id, seat, reconnect_token, player_count}
+const MSG_JOIN_REJECTED := "JOIN_REJECTED" # {reason}
+## A command was refused. The engine is still the one that decided.
+const MSG_ERROR := "ERROR"                 # {code, command, message}
+## Ports and seat occupancy (debug / table screen).
+const MSG_SERVER_INFO := "SERVER_INFO"     # {ws_port, http_port, seats: [{seat, connected, has_token}]}
 
 # --- builders -----------------------------------------------------------------
 
@@ -117,6 +127,23 @@ static func death_request(request: Dictionary) -> Dictionary:
 	})
 
 ## `private_to >= 0` means only that player may receive the payload contents.
+static func join_ok(player_id: int, seat: int, reconnect_token: String, player_count: int) -> Dictionary:
+	return message(MSG_JOIN_OK, {
+		"player_id": player_id,
+		"seat": seat,
+		"reconnect_token": reconnect_token,
+		"player_count": player_count,
+	})
+
+static func join_rejected(reason: String) -> Dictionary:
+	return message(MSG_JOIN_REJECTED, {"reason": reason})
+
+static func error_message(code: String, command_type: String, message_text: String) -> Dictionary:
+	return message(MSG_ERROR, {"code": code, "command": command_type, "message": message_text})
+
+static func server_info(ws_port: int, http_port: int, seats: Array) -> Dictionary:
+	return message(MSG_SERVER_INFO, {"ws_port": ws_port, "http_port": http_port, "seats": seats.duplicate(true)})
+
 static func domain_event(event_name: String, data: Dictionary, private_to: int = -1) -> Dictionary:
 	return message(MSG_DOMAIN_EVENT, {
 		"event": event_name,
@@ -129,7 +156,8 @@ static func domain_event(event_name: String, data: Dictionary, private_to: int =
 static func is_command_type(type: String) -> bool:
 	match type:
 		CMD_PLAY_LOOT, CMD_ACTIVATE_ITEM, CMD_DECLARE_ATTACK, CMD_BUY_SHOP, \
-		CMD_PASS_PRIORITY, CMD_SELECT_TARGET, CMD_CHOOSE_DEATH_PENALTY, CMD_END_TURN:
+		CMD_PASS_PRIORITY, CMD_SELECT_TARGET, CMD_CHOOSE_DEATH_PENALTY, CMD_END_TURN, \
+		CMD_JOIN:
 			return true
 	return false
 

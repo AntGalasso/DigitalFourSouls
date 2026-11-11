@@ -13,8 +13,9 @@ Adattamento digitale **flat-screen (non VR)** del gioco da tavolo
 Vedi `PROJECT_STATUS.md` (fonte di verità): fase 1 (provare l'architettura) in
 corso — hotseat locale, 34 carte, turn loop completo, **29 self-check**
 automatici che passano. Regole normate in `docs/RULES_NORMATIVE.md`; la UI è
-un client passivo sul protocollo comandi/snapshot. Non ancora multiplayer
-(fase 3) né espansioni (fase 4).
+un client passivo sul protocollo comandi/snapshot. **M3**: il PC può fare da
+server WebSocket + host PWA e i telefoni giocano dal browser (`run_table.bat`);
+non ancora espansioni (fase 4).
 
 ## Requisiti
 
@@ -29,6 +30,8 @@ un client passivo sul protocollo comandi/snapshot. Non ancora multiplayer
 | `run_import.bat` | Reimporta `data/cards_base_set_template.csv` → `resources/cards/base_set/*.tres` (valida prima di scrivere, fallisce con tutti gli errori stampati) |
 | `run_test.bat` | Turn loop headless (self-play, seed 8): 3 round + 29 self-check (A–AF); exit 0 solo se tutti passano |
 | `run_game.bat` | Partita hotseat 2 giocatori con la UI (main scene) |
+| `run_table.bat` | Modalità **Tavolo Host**: server WebSocket (8787) + HTTP/PWA (8788); apri sul telefono l'URL LAN mostrato a schermo |
+| `run_net_test.bat` | Gate di rete headless: server vero + 2 client WebSocket (join, privacy, bersaglio, priorità, anti-spoof, reconnect) |
 
 ## Architettura (in breve)
 
@@ -69,6 +72,12 @@ un client passivo sul protocollo comandi/snapshot. Non ancora multiplayer
 9. **Rng** (`scripts/autoload/rng.gd`) — unica fonte di casualità:
    `Rng.roll_die()` / `Rng.shuffle()`, deterministico con `Rng.seed_rng(seed)`.
    Mai `randi_range()` diretto nel codice di gioco.
+10. **Rete (M3)** — `scripts/net/net_server.gd` (WebSocket RFC 6455 su
+   `TCPServer` + `WebSocketPeer.accept_stream`, più host statico per la PWA) e
+   `web_client/` (client dei telefoni). Il telefono parla solo il protocollo di
+   `match_protocol.gd`; il **posto** decide il `player_id`, quindi un client
+   non può agire per un altro. Il PC in modalità tavolo (`-- --host`) rende
+   solo `snapshot_for(-1)`: nessuna mano a schermo.
 
 ## Regole implementate (fase 1)
 
@@ -117,6 +126,7 @@ eterno, 14 vanilla. Sorgente di verità: `data/cards_base_set_template.csv`
 | STEP AA–AD | identità della richiesta (request/player id), privacy degli snapshot, roundtrip di MatchState, teardown idempotente |
 | STEP AE | pila: un giro di pass risolve **una sola** entry (traccia `close → resolve` per ogni entry, finestra riaperta prima del tiro) |
 | STEP AF | protocollo: 8 comandi + 5 messaggi sono dati puri, roundtrip JSON, payload impuro rifiutato |
+| GATE M3 | rete end-to-end (`scenes/net_test.gd`): 18/18 — HTTP/PWA, join con token, privacy della mano, `TARGET_REQUEST`, finestra di priorità, anti-spoof, riconnessione |
 
 ## Limiti noti della versione attuale
 

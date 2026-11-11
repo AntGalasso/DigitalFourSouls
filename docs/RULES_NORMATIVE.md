@@ -61,6 +61,29 @@ intenzioni.
 - Un comando che richiede un bersaglio non viene indovinato dal server: il
   server risponde `TARGET_REQUEST` e attende `SELECT_TARGET`.
 
+## 2b. Rete, posti e riconnessione (M3)
+
+1. Il server autoritativo è il processo Godot sul PC. I telefoni non eseguono
+   regole: ricevono snapshot e richieste, inviano comandi.
+2. **Identità = posto.** `JOIN` assegna (o riprende) un posto e il server
+   **sovrascrive** il `player_id` di ogni comando con quello del posto; il
+   motore rivalida comunque l'identità sulle risposte alle finestre. Un client
+   non può agire per un altro posto, nemmeno falsificando il campo.
+3. Handshake: `JOIN {seat, token}` → `JOIN_OK {player_id, seat,
+   reconnect_token, player_count}` oppure `JOIN_REJECTED {reason}`. Il token va
+   salvato sul telefono (localStorage) e **ruota** a ogni join.
+4. Riconnessione: token valido ⇒ stesso `player_id`, `STATE_SNAPSHOT`
+   immediato e, se il giocatore deve ancora rispondere, il prompt pendente
+   (`PRIORITY_REQUEST` / `TARGET_REQUEST` / `DEATH_PENALTY_REQUEST`).
+5. Privacy sulla rete: uno snapshot per viewer; gli eventi privati (carta
+   pescata) non vengono inviati agli altri; il Tavolo usa `snapshot_for(-1)` e
+   quindi non mostra nessuna mano.
+6. Trasporto: WebSocket RFC 6455 (frame di testo = JSON del protocollo),
+   più un host HTTP statico sulla porta adiacente che serve la PWA. Nessun
+   runtime esterno (Node/Python) richiesto in LAN.
+7. Disconnessione = stato conservato sul server, mai abbandono della partita.
+   Una finestra aperta resta aperta finché il giocatore non risponde.
+
 ## 3. Struttura del turno
 
 Fasi (`MatchState.phase`), in ordine:
@@ -230,3 +253,7 @@ priorità.
    come se funzionassero: è compito di M4 (TriggerEngine).
 3. Cap massimo degli HP (regolamento: 6). Oggi non applicato.
 4. Carte Curse, espansioni, modalità oltre 2 giocatori.
+5. Rete: nessun TLS (`wss://`), nessun limite ai tentativi di token e nessuna
+   autenticazione oltre al token: il perimetro è la LAN domestica (M3).
+6. Nessun heartbeat/keepalive esplicito: la riconnessione si basa sulla
+   chiusura del socket e sul backoff del client.

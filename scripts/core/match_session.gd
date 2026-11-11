@@ -180,6 +180,7 @@ func _request_target(cmd: Dictionary, card_id: String) -> void:
 		"request_id": String(cmd.get("request_id", "")),
 		"card_id": card_id,
 		"command_type": String(cmd.get("type", "")),
+		"options": options.duplicate(true),
 	}
 	_emit(Protocol.target_request(
 		String(cmd.get("request_id", "")), int(cmd.get("player_id", -1)),
@@ -221,6 +222,45 @@ func _viewer() -> int:
 		return int(controller.state.current_player_index)
 	return 0
 
+func window_kind() -> String:
+	return driver.window_kind() if driver != null else ""
+
+func player_count() -> int:
+	return controller.state.players.size() if controller != null else 0
+
+## A STATE_SNAPSHOT for one specific viewer; `-1` is the table (no hands).
+## This is what the network layer sends, one per connected phone.
+func snapshot_message(viewer: int) -> Dictionary:
+	if controller == null:
+		return {}
+	return Protocol.state_snapshot(
+		controller.snapshot_for(viewer), controller.ui_actions(viewer), window_kind())
+
+## The request this player owes an answer to RIGHT NOW ({} if none). A phone
+## that reloads the page gets its pending prompt back instead of a dead screen.
+func pending_prompt(player_id: int) -> Dictionary:
+	if driver == null:
+		return {}
+	if driver.window_kind() == "priority":
+		var request: Dictionary = driver.pending_request()
+		if int(request.get("player_id", -1)) != player_id:
+			return {}
+		return Protocol.priority_request(request)
+	if driver.window_kind() == "death":
+		var death: Dictionary = driver.pending_request()
+		if int(death.get("player_id", -1)) != player_id:
+			return {}
+		return Protocol.death_request(death)
+	if not _pending_target.is_empty():
+		var pending_command: Dictionary = _pending_target.get("command", {})
+		if int(pending_command.get("player_id", -1)) == player_id:
+			return Protocol.target_request(
+				String(_pending_target.get("request_id", "")), player_id,
+				String(_pending_target.get("command_type", "")),
+				String(_pending_target.get("card_id", "")),
+				_pending_target.get("options", []))
+	return {}
+
 func _on_driver_message(msg: Dictionary) -> void:
 	_emit(msg)
 	emit_snapshot()
@@ -228,14 +268,12 @@ func _on_driver_message(msg: Dictionary) -> void:
 func _emit(msg: Dictionary) -> void:
 	message.emit(msg)
 
-## Domain events are filtered: a private event (a drawn card) leaves its
-## card_id only for the player it belongs to.
+## Domain events leave the session UNFILTERED, with `private_to` on the
+## envelope: each consumer (hotseat screen, table, socket) hides the contents
+## for viewers that are not allowed to see them. The transport must never be
+## the place where privacy is decided.
 func _emit_domain(event_name: String, data: Dictionary, private_to: int = -1) -> void:
-	var payload: Dictionary = data.duplicate(true)
-	if private_to >= 0 and private_to != _viewer():
-		if payload.has("card_id"):
-			payload["card_id"] = ""
-	_emit(Protocol.domain_event(event_name, payload, private_to))
+	_emit(Protocol.domain_event(event_name, data.duplicate(true), private_to))
 
 # --- Domain event bridge -----------------------------------------------------
 

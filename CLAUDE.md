@@ -137,7 +137,11 @@ exits non-zero if they fail.
 - Phase 3: online multiplayer — authoritative Godot server on the PC +
   lightweight PWA (HTML/TS) clients on phones over raw WebSocket (ratifica
   #1). NOT Godot Web export on phones and NOT ENet: the phone client must not
-  contain the engine.
+  contain the engine. **Status (M3): implemented** — `scripts/net/net_server.gd`
+  (RFC 6455 via `TCPServer` + `WebSocketPeer.accept_stream`, seats and
+  reconnect tokens, static HTTP host for `web_client/`), table mode with
+  `game_scene.tscn -- --host` (renders `snapshot_for(-1)` only), gate in
+  `scenes/net_test.gd`. Hotseat stays the default without `--host`.
 - Phase 4: Requiem + later expansions, UI polish.
 Each phase should be fully working and merged before the next starts.
 Do not build multiplayer or expansion content while Phase 1 is unproven.
@@ -155,7 +159,9 @@ Do not build multiplayer or expansion content while Phase 1 is unproven.
   exit code = test result) is the gate and must stay green.
 
 ## What NOT to do without being asked
-- Don't scaffold networking.
+- Don't put transports inside the rules: sockets/HTTP live in `scripts/net/`
+  and speak `scripts/core/match_protocol.gd`; the engine only knows
+  `MatchDriver`.
 - Don't scaffold monetization/store/analytics.
 - Don't import the full card catalogue in one go — small batches, validated
   as you go.
