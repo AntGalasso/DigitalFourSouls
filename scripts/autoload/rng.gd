@@ -7,19 +7,23 @@ extends Node
 ##  - tests can inject their own RandomNumberGenerator by replacing rng
 ##  - a future network phase can pass the same rng to every client
 
-var rng := RandomNumberGenerator.new()
+## Typed as Object ON PURPOSE: tests may inject any duck-typed stand-in that
+## exposes randi_range(from, to) — see turn_loop_test.gd FakeRng. Game code
+## only ever uses roll_die()/shuffle(), never this member directly.
+var rng: Object = RandomNumberGenerator.new()
 
 func seed_rng(value: int) -> void:
-	rng.seed = value
+	if rng is RandomNumberGenerator:
+		rng.seed = value
 
 ## 1..6 attack roll.
 func roll_die() -> int:
-	return rng.randi_range(1, 6)
+	return int(rng.randi_range(1, 6))
 
 ## Fisher-Yates shuffle driven by the injected rng (deck shuffles).
 func shuffle(items: Array) -> void:
 	for i in range(items.size() - 1, 0, -1):
-		var j := rng.randi_range(0, i)
+		var j: int = int(rng.randi_range(0, i))
 		var tmp = items[i]
 		items[i] = items[j]
 		items[j] = tmp

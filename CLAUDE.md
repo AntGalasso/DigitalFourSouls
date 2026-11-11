@@ -15,6 +15,12 @@ implying public release.
 - Rendering: gl_compatibility (keep it light, this is a card game not a 3D game).
 - No third-party dependencies unless explicitly requested.
 
+## Rules are normative
+`docs/RULES_NORMATIVE.md` is BINDING: turn phases, loot/tap costs, stack and
+priority semantics, death penalty, slots and the public/private data boundary
+all live there. If the code disagrees with that file, the code is wrong. If a
+new card needs behavior the file does not describe, update the file first.
+
 ## Architecture — read before writing any card logic
 1. **CardResource** (`scripts/core/card_resource.gd`) holds pure DATA for a
    card: stats, cost, text, and a behavior declaration (see below). Never put
@@ -38,11 +44,24 @@ implying public release.
 4. **EventBus** (`scripts/autoload/event_bus.gd`) is the single source of
    truth for game events (signals). Cards subscribe, they don't call each
    other. If you need a new kind of event, add a signal here first.
-5. **GameState** (`scripts/autoload/game_state.gd`) is the single source of
-   truth for match state (players, turn, phase). Players is a typed
-   `Array[Dictionary]`. Phase 1 is local hotseat only — do NOT add
-   networking/RPC code yet, that's a later phase and premature networking
-   code will just be dead weight to maintain.
+5. **MatchState** (`scripts/core/match_state.gd`) is the single source of
+   truth for match data: players, turn pointer, phase, table, shop, decks,
+   shields, souls, counters. It is PURE data plus serialization — it never
+   touches EventBus or the UI — and it can be snapshotted
+   (`to_dict()`) or reduced to a per-viewer DTO (`snapshot_for(player_id)`,
+   which never exposes another player's hand).
+5b. **GameState** (`scripts/autoload/game_state.gd`) is a FACADE over
+   MatchState: `GameState.players` / `current_player_index` / `soul_values` /
+   `shields` are views on `GameState.state`. It owns the mutation helpers that
+   also emit the matching EventBus signal. Never add match data anywhere else.
+5c. **MatchController** (`scripts/core/match_controller.gd`) owns the rules and
+   the transient resolution state (the stack, `_combat_in_progress`,
+   `_effect_window_open`). It asks for input ONLY through an injected
+   `MatchDriver` (`scripts/core/drivers/`), with request ids and legal-action
+   lists; it never awaits a global signal for input. `setup()` starts with an
+   idempotent `teardown()`, so a restart cannot inherit effects or stack
+   entries. Do NOT put sockets, RPCs or JSON in the controller: that is M3's
+   SocketDriver, and the engine must stay transport-agnostic.
 6. **CardEffectRegistry** (`scripts/core/card_effect_registry.gd`) is the
    autoload that wires cards to behavior: instantiates scripted effects,
    subscribes `trigger_events`, applies data-driven `simple_effect`, and
@@ -77,10 +96,11 @@ implying public release.
   03, Step C): signal connections are disconnected and instances dropped.
   Single-use loot played from hand is instantiated on the fly and unmounted
   immediately after resolving.
-- **The table has THREE monster slots, refilled automatically when a slot
-  frees up** (Metaprompt 05, decision b). The loop owns the slots and HP;
-  targeting is by instance_id everywhere (registry is already instance-keyed).
-  The self-play heuristic picks slot 0; human target choice arrives with the UI.
+- **The table has TWO base monster slots** (ratifica #4; the old "three" was a
+  documentation error), refilled automatically when a slot frees up, plus two
+  shop slots. The table is a LIST (`MatchState.table_monsters`), so a future
+  card or event may add a slot without a refactor. Targeting is by
+  `instance_id` everywhere.
 - **Simultaneous effects resolve in a fixed deterministic policy** (Metaprompt
   05, decision c): the registry's dispatchers re-emit triggers in active-player
   first, then clockwise, then registration (= purchase) order within a player.
@@ -114,8 +134,10 @@ exits non-zero if they fail.
   attack → loot), no UI polish. Goal: confirm the EventBus/CardEffect
   pattern scales before investing in the remaining ~250+ cards.
 - Phase 2: full base set (~100 cards), local hotseat, basic UI.
-- Phase 3: online multiplayer (Godot High-Level Multiplayer / ENet,
-  turn-based so no client prediction needed).
+- Phase 3: online multiplayer — authoritative Godot server on the PC +
+  lightweight PWA (HTML/TS) clients on phones over raw WebSocket (ratifica
+  #1). NOT Godot Web export on phones and NOT ENet: the phone client must not
+  contain the engine.
 - Phase 4: Requiem + later expansions, UI polish.
 Each phase should be fully working and merged before the next starts.
 Do not build multiplayer or expansion content while Phase 1 is unproven.
@@ -128,7 +150,9 @@ Do not build multiplayer or expansion content while Phase 1 is unproven.
   will not scale if effects pile up in shared files.
 - Write GUT (Godot Unit Test) tests for anything touching combat math or
   soul/win-condition logic — this is the part most likely to have subtle
-  bugs and hardest to eyeball-verify.
+  bugs and hardest to eyeball-verify. GUT itself is not vendored yet: until it
+  is, the headless self-check suite in `scenes/turn_loop_test.gd` (run_test.bat,
+  exit code = test result) is the gate and must stay green.
 
 ## What NOT to do without being asked
 - Don't scaffold networking.

@@ -36,6 +36,22 @@ func _ready() -> void:
 	EventBus.card_played.connect(_dispatch_card_played)
 	EventBus.monster_killed.connect(_dispatch_monster_killed)
 
+## Drops EVERY effect instance, trigger connection and owned-card record.
+## Called by MatchController.teardown(): this autoload outlives a match, so
+## without this a restart (reload_current_scene / a new game) inherits the
+## previous match's effects, rolled-up bonuses and monster hooks — the exact
+## class of bug the audit flagged (C4). Idempotent, safe on a fresh process.
+func reset() -> void:
+	for effect in _effects:
+		if effect != null:
+			effect.owning_player_id = -1
+	_effects.clear()
+	_by_card.clear()
+	_owned.clear()
+	_owned_effects.clear()
+	_monster_by_instance.clear()
+	_trigger_connections.clear()
+
 ## Registers a card owned by a player (bought treasure): stores it, and if
 ## scripted, instantiates its effect + subscribes trigger_events.
 ## instance_id must be unique per copy (the loop assigns it).

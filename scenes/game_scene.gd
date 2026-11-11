@@ -215,6 +215,14 @@ func _on_monster_pressed(slot: int) -> void:
 				_log_line("attack sequence: %s killed after %d rolls" % [monster_card.display_name, result["steps"]])
 			"player_died":
 				_log_line("attack sequence: you died after %d rolls" % result["steps"])
+			_:
+				if not result.get("valid", true):
+					if result.has("busy"):
+						_log_line("another action is still resolving — try again in a moment")
+					elif result.get("limit", false):
+						_log_line("attack limit reached (1 attack per turn)")
+					else:
+						_log_line("you can only attack on your own turn")
 		_refresh()
 	elif _pending_action.begins_with("target:"):
 		var hand_index := int(_pending_action.substr(7))
@@ -256,11 +264,11 @@ func _play_hand_card(hand_index: int, target_id: String) -> void:
 	var payload := {}
 	if target_id != "":
 		payload = {"target_id": target_id}
-	if not _controller.play_loot(card, player_id, payload):
-		_log_line("can't play %s — loot limit reached (1 per turn + character effect)" % card.display_name)
+	if not await _controller.play_loot(card, player_id, payload):
+		_log_line("can't play %s — one free loot per action phase, then your character is tapped" % card.display_name)
 		return
+	# the card left the hand inside play_loot(): the UI never mutates state
 	_log_line("played %s" % card.display_name)
-	GameState.players[player_id]["hand"].erase(card.id)
 	_refresh()
 
 func _on_items_use(card: CardResource) -> void:
@@ -286,7 +294,7 @@ func _play_active_item(target_id: String) -> void:
 			if target_id != "":
 				payload = {"target_id": target_id}
 			_log_line("used %s" % card.display_name)
-			_controller.play_loot(card, player_id, payload)
+			await _controller.play_loot(card, player_id, payload)
 			_refresh()
 			return
 
@@ -335,9 +343,10 @@ func _show_priority_overlay(pid: int) -> void:
 
 ## The other player's eternal item, gated on the pending roll (MP07 B): D6 /
 ## Belial only while a roll is PENDING on the stack — never before, never
-## after. Yum Heart heals anytime (self-heal in the window).
+## after. Yum Heart (prevent_damage) answers any window: one button per
+## possible player target.
 func _render_priority_eternal(pid: int) -> void:
-	var player := GameState.players[pid]
+	var player: Dictionary = GameState.players[pid]
 	var item: CardResource = _controller.card_resource(player["eternal_item_id"])
 	if item == null:
 		return
@@ -360,12 +369,13 @@ func _render_priority_eternal(pid: int) -> void:
 			minus.pressed.connect(_respond.bind({"action": "eternal", "payload": {"delta": -1}}))
 			_overlay_box.add_child(plus)
 			_overlay_box.add_child(minus)
-		"heal_player":
-			var yum := Button.new()
-			yum.text = "USE %s (heal P%d 1 HP)" % [item.display_name, pid + 1]
-			yum.disabled = player["eternal_used"]
-			yum.pressed.connect(_respond.bind({"action": "eternal", "payload": {"target_id": pid}}))
-			_overlay_box.add_child(yum)
+		"prevent_damage":
+			for target in range(GameState.players.size()):
+				var shield := Button.new()
+				shield.text = "%s on P%d (prevent next damage)" % [item.display_name, target + 1]
+				shield.disabled = player["eternal_used"]
+				shield.pressed.connect(_respond.bind({"action": "eternal", "payload": {"target_id": target}}))
+				_overlay_box.add_child(shield)
 
 ## The other player's hand, played as a priority response (their turn loot
 ## limit and character effect still apply in the engine).
@@ -398,8 +408,10 @@ func _on_eternal_use(payload: Dictionary) -> void:
 		_log_line("%s rerolls %d -> %d" % [item_name, result["old_roll"], result["new_roll"]])
 	elif result.has("new_roll"):
 		_log_line("%s adjusts the roll to %d" % [item_name, result["new_roll"]])
-	elif result.has("target_id"):
-		_log_line("%s heals P%d for 1 HP" % [item_name, result["target_id"] + 1])
+	elif result.has("target_player"):
+		_log_line("%s on P%d: next damage this turn is prevented" % [item_name, result["target_player"] + 1])
+	elif result.has("target_instance"):
+		_log_line("%s on %s: next damage is prevented" % [item_name, result["target_instance"]])
 	_refresh()
 
 ## Turn alternation fix (MP07 A): remember who starts next, and let the
@@ -423,17 +435,25 @@ func _show_overlay(text: String, button_text: String) -> void:
 		child.queue_free()
 	_overlay.visible = true
 
-## Choice overlay (e.g. "choose an item to lose"): replaces the single button
-## with one button per option; the single button is hidden.
+## Choice overlay with raw values (Yum Heart targets): one button per option,
+## the single action button hidden.
 func _show_choice_overlay(text: String, options: Array, on_choose: Callable) -> void:
+	var pairs: Array = []
+	for option in options:
+		pairs.append({"label": str(option), "value": option})
+	_show_labeled_choice(text, pairs, on_choose)
+
+## Choice overlay with display labels (card ids are neither readable nor
+## unique-looking): pairs are [{label, value}].
+func _show_labeled_choice(text: String, pairs: Array, on_choose: Callable) -> void:
 	_overlay_label.text = text
 	_overlay_button.visible = false
 	for child in _overlay_box.get_children():
 		child.queue_free()
-	for option in options:
+	for pair in pairs:
 		var button := Button.new()
-		button.text = str(option)
-		button.pressed.connect(on_choose.bind(option))
+		button.text = String(pair.get("label", "?"))
+		button.pressed.connect(on_choose.bind(pair.get("value", "")))
 		_overlay_box.add_child(button)
 	_overlay.visible = true
 
@@ -443,10 +463,10 @@ func _refresh() -> void:
 	var pid := GameState.current_player_index
 	_turn_label.text = "TURN — P%d" % (pid + 1)
 	for i in range(2):
-		var p := GameState.players[i]
+		var p: Dictionary = GameState.players[i]
 		var active := " (your turn)" if i == pid else ""
 		var char_name: String = p["character_id"].trim_prefix("character_").capitalize()
-		var char_state := "effect ready" if not p["character_effect_used"] else "effect used"
+		var char_state := "character ready" if not p["character_tapped"] else "character TAPPED"
 		_player_labels[i].text = "P%d%s — %s\n  HP %d/%d   cents %d   souls %s (value %d)\n  items: %s\n  %s (eternal: %s)" % [
 			i + 1, active, char_name, p["hp"], p["max_hp"], p["cents"], str(p["souls"]),
 			GameState.soul_total(i), str(p["items_passive"]), char_state, p["eternal_item_id"].trim_prefix("eternal_")]
@@ -462,7 +482,7 @@ func _refresh() -> void:
 		else:
 			button.text = "empty slot"
 			button.disabled = true
-	var player := GameState.players[pid]
+	var player: Dictionary = GameState.players[pid]
 	var buy_limit: bool = player["buys_used"] >= 1
 	for i in range(SHOP_SLOTS):
 		var button: Button = _shop_buttons[i]
@@ -500,8 +520,8 @@ func _refresh() -> void:
 func _rebuild_hand() -> void:
 	for child in _hand_box.get_children():
 		child.queue_free()
-	var player := GameState.players[GameState.current_player_index]
-	var loot_limit: bool = player["loot_played"] >= 1 and player["character_effect_used"]
+	var player: Dictionary = GameState.players[GameState.current_player_index]
+	var loot_limit: bool = not _controller.can_play_loot(GameState.current_player_index)
 	var hand: Array = player["hand"]
 	for i in range(hand.size()):
 		var card: CardResource = _controller.card_resource(hand[i])
@@ -533,7 +553,7 @@ func _rebuild_eternal() -> void:
 	for child in _eternal_box.get_children():
 		child.queue_free()
 	var pid := GameState.current_player_index
-	var player := GameState.players[pid]
+	var player: Dictionary = GameState.players[pid]
 	var item: CardResource = _controller.card_resource(player["eternal_item_id"])
 	if item == null:
 		return
@@ -559,9 +579,9 @@ func _rebuild_eternal() -> void:
 			minus.pressed.connect(_on_eternal_use.bind({"delta": -1}))
 			_eternal_box.add_child(plus)
 			_eternal_box.add_child(minus)
-		"heal_player":
+		"prevent_damage":
 			var yum := Button.new()
-			yum.text = "USE %s (heal a player 1 HP)" % item.display_name
+			yum.text = "USE %s (prevent next damage)" % item.display_name
 			yum.disabled = used
 			yum.pressed.connect(_on_yum_heart)
 			_eternal_box.add_child(yum)
@@ -571,7 +591,7 @@ func _rebuild_eternal() -> void:
 		_eternal_box.add_child(note)
 
 func _on_yum_heart() -> void:
-	_show_choice_overlay("Yum Heart — heal which player?", [0, 1], func(choice): _on_eternal_use({"target_id": choice}))
+	_show_choice_overlay("Yum Heart — prevent damage to which player?", [0, 1], func(choice): _on_eternal_use({"target_id": choice}))
 
 func _update_hint() -> void:
 	if _priority_open:
@@ -635,28 +655,54 @@ func _on_player_damaged(player_id: int, amount: int, _source: String) -> void:
 	_log_line("P%d takes %d damage" % [player_id + 1, amount])
 	_refresh()
 
-## Death is a penalty, not a match over (MP06 f): the controller already
-## applied the loot/cent loss; the player chooses one item to lose here. The
-## next player starts after the penalty (MP07 A).
+## Death is a penalty, not a match over (MP06 f / ratifica #5). The controller
+## already took the cent and TAPPED the character + items; the player then
+## chooses 1 loot card from their hand and 1 owned item to lose. The next
+## player starts after the penalty (MP07 A).
 func _on_player_died(player_id: int, penalty: Dictionary) -> void:
 	var losses: Array = []
 	if penalty.get("cents_lost", false):
 		losses.append("1 cent")
-	if penalty.get("loot_lost", "") != "":
-		losses.append("1 loot")
-	_log_line("P%d died — loses %s%s" % [player_id + 1, ", ".join(losses), " and 1 item" if not penalty.get("item_options", []).is_empty() else ""])
+	losses.append("character + items tapped")
+	_log_line("P%d died — loses %s" % [player_id + 1, ", ".join(losses)])
 	_next_player = (player_id + 1) % GameState.players.size()
+	var loot_options: Array = penalty.get("loot_options", [])
+	if loot_options.size() > 1:
+		_show_labeled_choice(
+			"P%d died — choose 1 loot card to discard" % (player_id + 1),
+			_card_pairs(loot_options),
+			func(choice): _on_death_loot_choice(player_id, String(choice), penalty))
+	else:
+		# 0 or 1 card: nothing to choose — the engine applies the documented
+		# automatic fallback only when the hand holds exactly one card.
+		_on_death_loot_choice(player_id, String(loot_options[0]) if loot_options.size() == 1 else "", penalty)
+
+## Step 2 of the penalty: the loot is settled, now the item (if any).
+func _on_death_loot_choice(player_id: int, loot_id: String, penalty: Dictionary) -> void:
+	if loot_id != "":
+		_log_line("P%d discards %s" % [player_id + 1, loot_id])
 	var options: Array = penalty.get("item_options", [])
 	if options.is_empty():
-		EventBus.player_death_resolved.emit(player_id, "")
-		_show_overlay("P%d died — turn over" % (player_id + 1), "Pass to P%d" % (_next_player + 1))
-	else:
-		_show_choice_overlay("Choose an item to lose to the death penalty", options, func(choice): _on_death_choice(player_id, choice))
+		_resolve_death(player_id, {"loot_id": loot_id, "item_id": ""})
+		return
+	_show_labeled_choice(
+		"Choose an item to lose to the death penalty",
+		_card_pairs(options),
+		func(choice): _resolve_death(player_id, {"loot_id": loot_id, "item_id": String(choice)}))
 
-func _on_death_choice(player_id: int, choice: String) -> void:
-	_log_line("P%d discards %s" % [player_id + 1, choice])
+func _resolve_death(player_id: int, choice: Dictionary) -> void:
+	if String(choice.get("item_id", "")) != "":
+		_log_line("P%d loses %s" % [player_id + 1, choice["item_id"]])
 	EventBus.player_death_resolved.emit(player_id, choice)
 	_show_overlay("P%d died — turn over" % (player_id + 1), "Pass to P%d" % (_next_player + 1))
+
+## [{label: display name, value: card id}] for a choice overlay.
+func _card_pairs(card_ids: Array) -> Array:
+	var pairs: Array = []
+	for card_id in card_ids:
+		var card: CardResource = _controller.card_resource(String(card_id))
+		pairs.append({"label": card.display_name if card != null else String(card_id), "value": String(card_id)})
+	return pairs
 
 func _on_monster_damaged_log(instance_id: String, amount: int) -> void:
 	for monster in _controller.table_monsters:

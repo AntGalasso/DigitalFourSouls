@@ -8,5 +8,6 @@ id = "loot_bomb"
 display_name = "Bomb"
 type = 4
 text = "Deal 2 damage to target monster."
-effect_script_path = "res://scripts/cards/effects/bomb.gd"
+simple_effect = "damage_monster"
+simple_effect_value = 2
 needs_target = true

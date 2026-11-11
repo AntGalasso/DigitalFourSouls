@@ -11,8 +11,9 @@ Adattamento digitale **flat-screen (non VR)** del gioco da tavolo
 ## Stato del progetto
 
 Vedi `PROJECT_STATUS.md` (fonte di verità): fase 1 (provare l'architettura) in
-corso — hotseat locale, 32 carte, turn loop completo, 7 self-check automatici
-che passano. Non ancora multiplayer (fase 3) né espansioni (fase 4).
+corso — hotseat locale, 34 carte, turn loop completo, **27 self-check**
+automatici che passano. Le regole sono normate in `docs/RULES_NORMATIVE.md`.
+Non ancora multiplayer (fase 3) né espansioni (fase 4).
 
 ## Requisiti
 
@@ -25,7 +26,7 @@ che passano. Non ancora multiplayer (fase 3) né espansioni (fase 4).
 | Comando | Cosa fa |
 |---|---|
 | `run_import.bat` | Reimporta `data/cards_base_set_template.csv` → `resources/cards/base_set/*.tres` (valida prima di scrivere, fallisce con tutti gli errori stampati) |
-| `run_test.bat` | Turn loop headless (self-play, seed 8): 3 round + 7 self-check (A, C, F, G, H, I, J); exit 0 solo se tutti passano |
+| `run_test.bat` | Turn loop headless (self-play, seed 8): 3 round + 27 self-check (A–AD); exit 0 solo se tutti passano |
 | `run_game.bat` | Partita hotseat 2 giocatori con la UI (main scene) |
 
 ## Architettura (in breve)
@@ -43,9 +44,15 @@ che passano. Non ancora multiplayer (fase 3) né espansioni (fase 4).
    scripted; parla col resto del gioco SOLO via segnali EventBus e GameState.
 4. **EventBus** (`scripts/autoload/event_bus.gd`) — unica fonte di verità per
    gli eventi di gioco. Le carte si sottoscrivono, non si chiamano tra loro.
-5. **GameState** (`scripts/autoload/game_state.gd`) — unica fonte di verità per
-   lo stato della partita (giocatori, turno, fase). I mostri in tavola vivono
-   nel turn loop / scena, NON qui (decisione documentata in CLAUDE.md).
+5. **MatchState** (`scripts/core/match_state.gd`) — unico stato della partita,
+   serializzabile (`to_dict()`) e filtrabile per vista
+   (`snapshot_for(player_id)`: la mano altrui non esce mai dal server).
+   **GameState** (`scripts/autoload/game_state.gd`) è solo una facciata su
+   `GameState.state`.
+6. **MatchDriver** (`scripts/core/drivers/`) — l'unico modo in cui il motore
+   chiede input: richiesta con `request_id` + `player_id` + azioni legali.
+   L'adapter hotseat (`LocalUiDriver`) inoltra alla UI; in M3 un SocketDriver
+   servirà i telefoni senza toccare il motore.
 6. **CardEffectRegistry** (`scripts/core/card_effect_registry.gd`) — collega
    carte e comportamento: istanzia gli effetti scripted, sottoscrive i
    `trigger_events`, applica i `simple_effect`, dispaccia on_play/on_attacked/
@@ -53,17 +60,19 @@ che passano. Non ancora multiplayer (fase 3) né espansioni (fase 4).
    duplicate non collidono). Gli effetti vengono **smontati** quando la carta
    esce dal gioco (nessuna crescita di `_effects`).
 7. **MatchController** (`scripts/core/match_controller.gd`) — unico proprietario
-   delle regole: setup, turno, buy/attack/play_loot/draw_loot, morte,
-   personaggi/oggetti eterni. Usato sia dal test self-play sia dalla UI umana
-   (nessuna duplicazione di regole).
+   delle regole: setup/teardown, turno, buy/attack/play_loot/draw_loot, morte,
+   personaggi/oggetti eterni, pila e priorità. Usato sia dal test self-play sia
+   dalla UI umana (nessuna duplicazione di regole).
 8. **Rng** (`scripts/autoload/rng.gd`) — unica fonte di casualità:
    `Rng.roll_die()` / `Rng.shuffle()`, deterministico con `Rng.seed_rng(seed)`.
    Mai `randi_range()` diretto nel codice di gioco.
 
 ## Regole implementate (fase 1)
 
-- Turno: ordine libero in main phase con limiti — **1 buy, 1 attack, 1 loot +
-  1 via effetto personaggio** per turno (end turn esplicito in UI).
+- Turno: fasi start → action → combat → end. Ordine libero in `action` con
+  limiti: **1 buy, 1 attack, 1 Loot gratuita**; ogni Loot successiva o fuori
+  turno costa il **tap della Carta Personaggio** (si untappa nella start del
+  turno successivo).
 - Attacco: **sequenza di roll** 1d6 + modificatori vs die value dello slot
   scelto, con finestra di risposta tra un roll e l'altro (RESOLVE/STOP in UI;
   lì si possono usare oggetti eterni come D6/Belial).
@@ -73,17 +82,18 @@ che passano. Non ancora multiplayer (fase 3) né espansioni (fase 4).
   giocatore.
 - Fine turno: **heal pieno** per tutti i giocatori e i mostri in tavola;
   ricarica degli oggetti eterni del proprietario.
-- **Morte**: penalità (1¢, 1 loot a caso, 1 oggetto a scelta — l'eterno è
-  protetto), poi si continua; il match non termina mai per morte.
+- **Morte**: penalità (perde 1¢, tappa personaggio e oggetti, **sceglie** 1
+  Loot dalla mano da scartare — automatico solo con 1 carta — e 1 oggetto;
+  l'eterno è protetto), poi si continua; il match non termina mai per morte.
 - **Heal a HP pieni → +max HP permanente** (regola del regolamento reale).
 - **Personaggi**: Isaac (D6 reroll), Judas (Belial Book ±1), Magdalene (Yum
-  Heart heal 1) — 2 HP, 1 danno; l'effetto personaggio è "gioca 1 loot extra",
-  usabile anche nel turno altrui; ricarica a inizio turno del proprietario.
+  Heart) — 2 HP, 1 danno; gli oggetti eterni si usano nelle finestre di
+  priorità e si ricaricano a inizio turno del proprietario.
 - Win a 4 soul.
 
-## Set carte (32)
+## Set carte (34)
 
-14 mostri · 6 loot · 6 tesori (10¢) · 3 personaggi · 3 oggetti eterni
+15 mostri · 6 loot · 7 tesori (10¢) · 3 personaggi · 3 oggetti eterni
 — 4 scripted, 7 data-driven, 1 modificatore di roll statico, 6 carattere/
 eterno, 14 vanilla. Sorgente di verità: `data/cards_base_set_template.csv`
 (i `.tres` sono generati dall'importer, non da modificare a mano).
@@ -99,13 +109,16 @@ eterno, 14 vanilla. Sorgente di verità: `data/cards_base_set_template.csv`
 | STEP H | oggetti eterni (D6/Belial) in finestra d'attacco + ricarica |
 | STEP I | limiti azioni + effetto personaggio (anche cross-turn) |
 | STEP J | heal a HP pieni → +max HP |
+| STEP K–T | alternanza turni, morte-penalità, eterni, limiti, shop, timing, priorità, danno, campi carta, anime |
+| STEP U–Z | i 6 ESEMPI (turno completo, D6, Belial, chiusura combattimento, Yum Heart, Loot sulla pila) |
+| STEP AA–AD | identità della richiesta (request/player id), privacy degli snapshot, roundtrip di MatchState, teardown idempotente |
 
 ## Limiti noti della versione attuale
 
 1. Nessuna arte (carte testuali).
 2. Solo 2 giocatori; ordine effetti simultanei a policy fissa (nessuna scelta).
-3. La loot pescata non si tiene in mano tra turni (hand = solo turno attivo).
-4. Le azioni difensive dell'avversario nel tuo turno (loot via effetto
-   personaggio, oggetti eterni) esistono nel motore ma non sono raggiungibili
-   dalla UI hotseat a schermo singolo.
+3. Il confine pubblico/privato è calcolato dal server (`snapshot_for`) ma la
+   UI hotseat legge ancora lo stato locale: i telefoni arrivano in M3.
+4. Gli `effect_trigger` dei mostri sono dichiarati e validati ma non ancora
+   eseguiti dal motore (TriggerEngine, M4).
 5. HP non cappato a 6; nessuna carta curse.
