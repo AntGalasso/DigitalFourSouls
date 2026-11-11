@@ -45,6 +45,9 @@ extends Node
 ##            expire unused at end of owner's turn + recharge)
 ##  - STEP Z (ESEMPIO 5): loot play becomes pending_effect; the NON-active
 ##            player gets a priority window before Bomb resolves
+##  - STEP AE (Comprehensive Rules): a round of passes resolves ONLY the top of
+##            the stack; loot in response is pushed (not atomic), the entry
+##            underneath gets a FRESH window before it resolves
 ## And a final PROJECT_STATUS thermometer (card count, checks, playability).
 ##
 ## HOW TO RUN: run_test.bat, or
@@ -56,6 +59,7 @@ const CARD_DIR := "res://resources/cards/base_set/"
 ## editor, so headless CLI runs resolve this via preload instead.
 const MatchControllerScript := preload("res://scripts/core/match_controller.gd")
 const MatchStateScript := preload("res://scripts/core/match_state.gd")
+const Protocol := preload("res://scripts/core/match_protocol.gd")
 
 var _controller
 var _driver                       # ScriptedDriver — replaces the old global-signal hooks
@@ -138,6 +142,8 @@ func _run_all() -> void:
 	await _check_ex3_combat_closure()
 	await _check_ex4_yum_heart_shield()
 	await _check_ex5_loot_stack()
+	await _check_single_resolution()
+	_check_protocol_purity()
 	# M1 invariants (ratifiche #2, #3): identity-bound input, private snapshots,
 	# serializable state, restartable engine.
 	await _check_priority_identity()
@@ -964,7 +970,7 @@ func _check_ex2_d6_reroll() -> void:
 	ok = ok and _v_pushed.size() == 2
 	ok = ok and _v_pushed[0][0] == "pending_roll" and _v_pushed[0][2] == 2   # raw roll 2, PENDING
 	ok = ok and _v_pushed[1][0] == "modifier"                                # D6 answer ON TOP
-	ok = ok and _v_asks == [0, 1, 0, 1]                                      # active first; restart after response
+	ok = ok and _v_asks == [0, 1, 0, 1, 0, 1]                              # active first; restart after response; NEW window on the roll after the modifier resolved
 	ok = ok and result.get("final_roll", -1) == 5                            # reroll changed the value
 	ok = ok and _v_resolved.size() == 2 and _v_resolved[0][0] == "modifier"  # LIFO: modifier first
 	ok = ok and _v_resolved[1][0] == "pending_roll"
@@ -1193,6 +1199,141 @@ func _check_ex5_loot_stack() -> void:
 	print("  STEP Z ESEMPIO-5 check: %s (Bomb pushed pending_effect; asked %s; Gaper hp 5 -> %d)" % [
 		"PASS" if ok else "FAIL", str(_z_asks), _find_table_hp("monster_gaper#z")])
 	_record_check("STEP Z ESEMPIO 5 loot pending_effect + window for all", ok)
+
+## --- STEP AE: one round of passes resolves exactly ONE stack entry -----------
+
+## Comprehensive Rules (same as MTG): when everybody passes in sequence, only
+## the TOP entry resolves. A loot played in response goes ON the stack (it does
+## not resolve during the window), resolves first as a single entry, and the
+## pending roll underneath then gets a FRESH priority window before resolving
+## — which is what makes "draw in response, then answer the roll" possible.
+var _ae_resolved: Array = []
+var _ae_trace: Array = []
+var _ae_stack_after_first: int = -1
+var _ae_hp_at_effect_resolution: int = -1
+
+func _check_single_resolution() -> void:
+	print("\n-- CHECK: STEP AE — a pass round resolves only the TOP entry --")
+	var p0: Dictionary = GameState.players[0]
+	var p1: Dictionary = GameState.players[1]
+	_clear_player_items(0)
+	_clear_player_items(1)
+	var fly: CardResource = load(CARD_DIR + "monster_attack_fly.tres")
+	if fly == null:
+		Log.error("turn_loop_test: monster_attack_fly.tres missing (run the import)")
+		get_tree().quit(1)
+		return
+	_set_single_monster("monster_attack_fly#ae", fly, 5)
+	_controller.begin_turn(0)
+	# Only P1 can answer: no eternal items anywhere, P0 with no hand.
+	p0["character_id"] = "character_isaac"
+	p0["eternal_item_id"] = ""
+	p0["eternal_used"] = false
+	p0["character_tapped"] = false
+	p0["hand"] = []
+	p1["character_id"] = "character_judas"
+	p1["eternal_item_id"] = ""
+	p1["eternal_used"] = true
+	p1["character_tapped"] = false
+	p1["hp"] = 1
+	p1["max_hp"] = 2
+	p1["hand"] = ["loot_dinner"]
+	_ae_resolved.clear()
+	_ae_trace.clear()
+	_ae_stack_after_first = -1
+	_ae_hp_at_effect_resolution = -1
+	var on_resolved := func(entry: Dictionary, _result: Dictionary):
+		var kind: String = String(entry.get("type", ""))
+		_ae_resolved.append([kind, String(entry.get("card_id", entry.get("id", "")))])
+		_ae_trace.append("resolve:" + kind)
+		if _ae_resolved.size() == 1:
+			# ONLY the top resolved: the roll must still be on the stack, and the
+			# effect must already be visible in the state.
+			_ae_stack_after_first = _controller.stack.size()
+			_ae_hp_at_effect_resolution = int(p1["hp"])
+	var on_closed := func(stack_type: String, _payload: Dictionary):
+		_ae_trace.append("close:" + stack_type)
+	EventBus.stack_entry_resolved.connect(on_resolved)
+	EventBus.priority_closed.connect(on_closed)
+	# 1. a pending roll sits alone on the stack, exactly as an attack leaves it
+	_controller.stack.push({"type": "pending_roll", "owner": 0,
+		"target": "monster_attack_fly#ae", "value": 2, "bonus": 0,
+		"die_value": fly.die_value, "source": "attack"})
+	# 2. P1 answers the window with a loot card: it goes ON TOP, still pending
+	var dinner: CardResource = load(CARD_DIR + "loot_dinner.tres")
+	var responded: bool = _controller._play_loot_in_priority(dinner, 1, "")
+	var stack_before: int = _controller.stack.size()
+	var dinner_still_in_hand: bool = (p1["hand"] as Array).has("loot_dinner")
+	# 3. the real resolution loop (windows + one entry per round)
+	var result: Dictionary = await _controller._resolve_stack()
+	EventBus.stack_entry_resolved.disconnect(on_resolved)
+	EventBus.priority_closed.disconnect(on_closed)
+	var ok: bool = responded and not dinner_still_in_hand
+	ok = ok and stack_before == 2                                   # nothing resolved during the window
+	ok = ok and _ae_resolved.size() == 2
+	ok = ok and String(_ae_resolved[0][0]) == "pending_effect"      # TOP first (LIFO)
+	ok = ok and _ae_stack_after_first == 1                          # ONE entry resolved, not the block
+	ok = ok and _ae_hp_at_effect_resolution == 2                    # Dinner already applied
+	ok = ok and String(_ae_resolved[1][0]) == "pending_roll"        # the roll resolves later
+	ok = ok and _ae_trace == ["close:pending_effect", "resolve:pending_effect",
+		"close:pending_roll", "resolve:pending_roll"]              # NEW window before the roll resolves
+	ok = ok and result.get("roll", -1) == 2 and not result.get("hit", true)  # 2 vs die 3: MISS
+	ok = ok and _controller.stack.is_empty()
+	ok = ok and p1["character_tapped"]                              # out-of-turn loot paid with the tap
+	print("  STEP AE single-resolution check: %s (trace %s; stack after the first resolution: %d)" % [
+		"PASS" if ok else "FAIL", str(_ae_trace), _ae_stack_after_first])
+	_record_check("STEP AE single-entry stack resolution (top only per pass round)", ok)
+
+## --- STEP AF (M2): the protocol carries pure data only ----------------------
+
+## Every command and every message must survive JSON as-is: no Object, no
+## Resource, no Callable may cross the client/server boundary. The validator
+## must also REJECT an impure command and a command with a bad type/player.
+func _check_protocol_purity() -> void:
+	print("\n-- CHECK: STEP AF — protocol boundary carries pure data only --")
+	var commands: Array = [
+		Protocol.command(Protocol.CMD_PLAY_LOOT, 0, {"card_id": "loot_bomb", "target_id": "monster_gaper#1"}),
+		Protocol.command(Protocol.CMD_DECLARE_ATTACK, 1, {"target_id": "monster_gaper#1"}),
+		Protocol.command(Protocol.CMD_BUY_SHOP, 0, {"slot": 0}),
+		Protocol.command(Protocol.CMD_PASS_PRIORITY, 1, {}, "pr12"),
+		Protocol.command(Protocol.CMD_SELECT_TARGET, 1, {"target_id": "monster_gaper#1"}, "tg3"),
+		Protocol.command(Protocol.CMD_CHOOSE_DEATH_PENALTY, 0, {"loot_id": "loot_bomb", "item_id": "treasure_the_bible"}, "dr4"),
+		Protocol.command(Protocol.CMD_ACTIVATE_ITEM, 0, {"delta": -1}),
+		Protocol.command(Protocol.CMD_END_TURN, 0),
+	]
+	var messages: Array = [
+		Protocol.state_snapshot(_controller.snapshot_for(0), _controller.ui_actions(0), "priority"),
+		Protocol.priority_request({
+			"request_id": "pr1", "player_id": 1, "stack_type": "pending_roll",
+			"entry": {"type": "pending_roll", "id": "r1", "value": 3},
+			"legal_actions": [{"action": "pass"}], "phase": "combat", "turn_player_id": 0}),
+		Protocol.target_request("tg1", 0, Protocol.CMD_PLAY_LOOT, "loot_bomb", [{"instance_id": "m#1"}]),
+		Protocol.death_request({"request_id": "dr1", "player_id": 0, "penalty": {"loot_options": ["loot_bomb"]}}),
+		Protocol.domain_event("card_drawn", {"player_id": 0, "card_id": "loot_bomb"}, 0),
+	]
+	var ok: bool = true
+	for cmd in commands:
+		ok = ok and Protocol.validation_error(cmd) == ""
+		ok = ok and Protocol.is_pure(cmd)
+		ok = ok and Protocol.to_wire(cmd) != ""
+		var back: Dictionary = Protocol.from_wire(Protocol.to_wire(cmd))
+		ok = ok and String(back.get("type", "")) == String(cmd["type"])
+		ok = ok and int(back.get("schema_version", 0)) == Protocol.SCHEMA_VERSION
+	for msg in messages:
+		ok = ok and Protocol.is_pure(msg)
+		ok = ok and Protocol.to_wire(msg) != ""
+	# ...and the validator rejects everything that must never ship.
+	ok = ok and Protocol.validation_error(Protocol.command("NOT_A_COMMAND", 0)) == "unknown_command"
+	ok = ok and Protocol.validation_error(Protocol.command(Protocol.CMD_BUY_SHOP, -1, {})) == "bad_player_id"
+	var impure := {"kind": "command", "schema_version": Protocol.SCHEMA_VERSION,
+		"type": Protocol.CMD_BUY_SHOP, "player_id": 0, "request_id": "",
+		"payload": {"card": CardResource.new()}}
+	ok = ok and Protocol.validation_error(impure) == "impure_payload"
+	# the RAW state is NOT shippable (resources on the table) — the snapshot is.
+	ok = ok and not Protocol.is_pure(_controller.state.table_monsters)
+	print("  STEP AF protocol check: %s (%d commands, %d messages, JSON roundtrip; impure payload refused)" % [
+		"PASS" if ok else "FAIL", commands.size(), messages.size()])
+	_record_check("STEP AF protocol purity (JSON-only commands/messages)", ok)
 
 ## --- STEP AA (ratifica #3): input is bound to ONE request and ONE player ------
 

@@ -44,6 +44,23 @@ Regola: un client non riceve mai l'identità delle carte nella mano altrui, né
 l'ordine dei mazzi. La UI non calcola regole: rende lo snapshot ed emette
 intenzioni.
 
+**Protocollo (M2).** Il confine è un protocollo di dati puri
+(`scripts/core/match_protocol.gd`).
+
+- Comandi client→server: `PLAY_LOOT`, `ACTIVATE_ITEM`, `DECLARE_ATTACK`,
+  `BUY_SHOP`, `PASS_PRIORITY`, `SELECT_TARGET`, `CHOOSE_DEATH_PENALTY`,
+  `END_TURN`.
+- Messaggi server→client: `STATE_SNAPSHOT`, `PRIORITY_REQUEST`,
+  `TARGET_REQUEST`, `DEATH_PENALTY_REQUEST`, `DOMAIN_EVENT`.
+- Solo stringhe, interi, float, booleani, `Array` e `Dictionary`: nessun
+  `Object`, `Resource`, `Callable` o nodo attraversa il confine (verificato da
+  STEP AF con un roundtrip JSON reale).
+- La legalità è **del server** e viaggia con lo snapshot
+  (`MatchController.ui_actions()`): il client non ricalcola limiti di
+  acquisto, costi, tap o disponibilità dell'eterno.
+- Un comando che richiede un bersaglio non viene indovinato dal server: il
+  server risponde `TARGET_REQUEST` e attende `SELECT_TARGET`.
+
 ## 3. Struttura del turno
 
 Fasi (`MatchState.phase`), in ordine:
@@ -105,12 +122,23 @@ del proprietario.
    (auto-pass); chi ha azioni legali viene interrogato e può passare.
 4. **Pass consecutivi pari al numero di giocatori** chiudono la finestra.
    Una risposta valida azzera il conteggio e riparte dal giocatore attivo.
-5. Alla chiusura si risolvono, in un solo blocco LIFO, le entry presenti in
-   quel momento (modificatore → tiro, ecc.).
+5. Alla chiusura della finestra si risolve **esattamente una entry**: quella
+   in cima (`EventStack.resolve_one()`). La pila **non** si risolve in blocco
+   (come in MTG): se resta qualcosa sotto, si apre una **nuova finestra** su
+   quella entry **prima** di risolverla.
+   - *Modificatore sul dado*: `pending_roll` = 2, un giocatore mette un +2; i
+     pass chiudono → si risolve **solo** il modificatore (il tiro diventa 4);
+     nuova finestra sul tiro a 4, così gli avversari possono rispondere al
+     nuovo risultato prima che il tiro si risolva.
+   - *Pescare in risposta*: `pending_roll` letale, un giocatore risponde con
+     una Loot che pesca; si risolve **solo** la pescata, il tiro è ancora
+     sulla pila, si riapre la finestra e il giocatore può giocare la carta
+     appena pescata.
 6. **Risoluzione ricorsiva**: se un'entry, risolvendosi, ne inserisce altre,
    queste vengono risolte **prima** che il motore torni al chiamante, con una
    nuova finestra per la nuova cima. Nessuna entry può essere distrutta
-   silenziosamente.
+   silenziosamente. Guardia anti-loop: massimo `MAX_RESOLUTION_ROUNDS` (64)
+   giri, poi la pila viene svuotata con un errore loggato.
 7. L'input passa **solo** dal driver (`MatchDriver`): richiesta con
    `request_id`, `player_id`, `legal_actions`; la risposta è valida solo se
    entrambi gli identificativi coincidono. Risposta scaduta o di un altro
@@ -119,8 +147,14 @@ del proprietario.
    client non inventa opzioni.
 9. "STOP attack" **non esiste**: un attacco termina solo con la morte del
    mostro o del giocatore.
-10. Le giocate Loot in risposta sono **atomiche** (nessuna finestra annidata):
-    semplificazione dichiarata della fase 1, da rivedere in M4.
+10. Una Loot giocata **in risposta** va sulla pila come `pending_effect`: non
+    si risolve dentro la finestra. Il costo del tap è addebitato subito e la
+    carta esce subito dalla mano; la risoluzione arriva con il giro di pass
+    successivo. La vecchia semplificazione "loot in risposta atomica" (M1) è
+    stata **rimossa** in M2.
+11. La finestra interroga sempre la **cima corrente**: se una risposta
+    inserisce una nuova entry il giro riparte dall'attivo, e le azioni legali
+    mostrate sono quelle della nuova cima.
 
 ## 7. Combattimento e danni
 

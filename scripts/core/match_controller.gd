@@ -12,9 +12,12 @@ extends RefCounted
 ##    actions, stack entry), asks the injected MatchDriver and validates the
 ##    answer. A stale request id or a foreign player id is a PASS, never an
 ##    action (audit C3).
-##  - RESOLUTION IS RECURSIVE. An effect that pushes a new entry while it
-##    resolves is resolved before the engine returns, instead of being wiped
-##    by reset_combat_state() (audit C1).
+##  - RESOLUTION IS RECURSIVE AND SINGLE-ENTRY. One round of consecutive
+##    passes resolves EXACTLY the top of the stack (Comprehensive Rules, same
+##    as MTG); if anything is left underneath, a FRESH priority window opens
+##    before it resolves. An effect that pushes a new entry while it resolves
+##    gets its own window instead of being wiped by reset_combat_state()
+##    (audit C1).
 ##  - setup() begins with teardown(), and teardown() is idempotent: a restart
 ##    never inherits effects, shields or stack entries from the previous match
 ##    (audit C4).
@@ -456,6 +459,11 @@ func _run_stack_window(entry: Dictionary) -> void:
 	var idx: int = state.current_player_index
 	var passes: int = 0
 	while passes < count:
+		if stack == null or stack.is_empty():
+			break
+		# A response may have pushed a new entry on top: every subsequent ask
+		# (and its legal-action list) must be about the CURRENT top.
+		entry = stack.top()
 		if not _player_has_response(idx, entry):
 			print("%s passes priority on %s (no responses available)" % [
 				_pname(idx), stack.top().get("id", "?")])
@@ -570,6 +578,66 @@ func _legal_actions(player_id: int, entry: Dictionary) -> Array:
 					actions.append({"action": "eternal", "payload": {"item_action": "prevent_damage"}, "item_action": "prevent_damage"})
 	return actions
 
+## Server-owned legality for the LOCAL client (ratifica #2 / M2): the scene
+## renders these flags and never recomputes a limit, a cost or a tap state.
+## Pure read: no state mutation, no prints.
+func ui_actions(player_id: int) -> Dictionary:
+	var out := {
+		"player_id": player_id,
+		"phase": state.phase,
+		"is_active": player_id == state.current_player_index,
+		"busy": _effect_window_open or _combat_in_progress,
+		"can_attack": false,
+		"can_buy": false,
+		"can_end_turn": false,
+		"loot_playable": [],
+		"items_playable": [],
+		"shop": [],
+		"eternal": {},
+	}
+	if player_id < 0 or player_id >= state.players.size():
+		return out
+	var player: Dictionary = state.players[player_id]
+	var busy: bool = out["busy"]
+	out["can_end_turn"] = bool(out["is_active"]) and not busy
+	out["can_attack"] = bool(out["is_active"]) and not busy \
+		and int(player["attacks_used"]) < 1 and not state.table_monsters.is_empty()
+	for slot in range(state.shop_slots.size()):
+		var treasure: CardResource = state.shop_slots[slot]["card"]
+		if treasure == null:
+			continue
+		var reason: String = ""
+		if not out["is_active"]:
+			reason = "not_your_turn"
+		elif int(player["buys_used"]) >= 1:
+			reason = "buy_used"
+		elif bool(state.bought.get(player_id, {}).has(treasure.id)):
+			reason = "already_bought"
+		elif int(player["cents"]) < treasure.cost_cents:
+			reason = "too_poor"
+		out["shop"].append({
+			"slot": slot, "card_id": treasure.id, "cost_cents": treasure.cost_cents,
+			"buyable": reason == "", "reason": reason})
+		if reason == "":
+			out["can_buy"] = true
+	if bool(out["is_active"]) and state.phase == MatchStateScript.PHASE_ACTION \
+			and not busy and can_play_loot(player_id):
+		for card_id in player["hand"]:
+			var loot: CardResource = card_resource(String(card_id))
+			if loot != null and loot.type == CardResource.CardType.LOOT:
+				out["loot_playable"].append(String(card_id))
+	for card_id in player["items_passive"]:
+		var item: CardResource = card_resource(String(card_id))
+		if item != null and item.playable:
+			out["items_playable"].append(String(card_id))
+	var eternal: CardResource = card_resource(String(player["eternal_item_id"]))
+	if eternal != null:
+		out["eternal"] = {
+			"item_id": eternal.id, "action": eternal.eternal_action,
+			"available": not bool(player["eternal_used"]),
+			"pending_roll": not get_pending_roll().is_empty()}
+	return out
+
 ## A player is ASKED only when it has a real response (not merely "resolve"):
 ## otherwise the window auto-passes them, exactly like before, but now the
 ## decision comes from the same legal-action list the clients see.
@@ -579,35 +647,38 @@ func _player_has_response(player_id: int, entry: Dictionary) -> bool:
 			return true
 	return false
 
-## Plays a loot card ATOMICALLY as a priority response: the card must be in
-## hand and the loot cost must be payable. Response loots NEVER open a nested
-## window — they resolve immediately (documented Phase-1 simplification).
+## A loot card played AS A PRIORITY RESPONSE goes ON THE STACK as a
+## pending_effect (Comprehensive Rules): it does NOT resolve during the
+## window. The cost is charged and the card leaves the hand NOW, then a round
+## of passes resolves it — one entry — and the entry underneath gets a new
+## window. That is what lets "draw a card in response, then play it against
+## the pending roll" actually work.
 func _play_loot_in_priority(card: CardResource, player_id: int, target_id: String) -> bool:
 	if not state.players[player_id]["hand"].has(card.id):
 		return false
+	# NOTE: combat_in_progress MUST NOT block this — responding during an attack
+	# is the whole point of the window (only play_loot() outside a window does).
 	if card.type == CardResource.CardType.LOOT and not _charge_loot_play(player_id):
 		return false
 	var payload := {}
 	if target_id != "":
 		payload = {"target_id": target_id}
-	_resolve_loot_immediately(card, player_id, payload)
 	state.players[player_id]["hand"].erase(card.id)
+	stack.push({"type": "pending_effect", "owner": player_id, "card_id": card.id, "payload": payload})
+	print("%s responds with %s (pending on the stack)" % [_pname(player_id), card.display_name])
 	return true
-
-func _resolve_loot_immediately(card: CardResource, player_id: int, payload: Dictionary) -> void:
-	CardEffectRegistry.play_card(card, player_id, payload)
-	EventBus.card_played.emit(player_id, card.id)
 
 # --- Stack resolution (recursive, audit C1 / ratifica #3) ----------------------
 
-## Drives resolution until the stack is empty: for every new top entry a fresh
-## window opens, then the entries that were present when that window closed are
-## resolved LIFO in one batch. An effect that pushes a NEW entry while
-## resolving therefore gets its own window before the engine returns, instead
-## of being destroyed by reset_combat_state().
+## Drives resolution until the stack is empty, ONE ENTRY PER ROUND: a fresh
+## priority window opens on the current top, consecutive passes close it, and
+## exactly that top entry resolves (`resolve_one`). If anything is left, the
+## loop opens ANOTHER window for it before it resolves — never a block
+## resolution (Comprehensive Rules: one round of passes = one stack object).
 ## Returns the last pending_roll result (the hit/miss the attack needs) or the
-## last batch result.
+## last entry result.
 func _resolve_stack() -> Dictionary:
+	var last_roll: Dictionary = {}
 	var last_result: Dictionary = {}
 	var rounds: int = 0
 	while stack != null and not stack.is_empty():
@@ -618,11 +689,16 @@ func _resolve_stack() -> Dictionary:
 			stack.clear("resolution_guard")
 			break
 		await _run_stack_window(stack.top())
-		if stack.is_empty():
+		if stack == null or stack.is_empty():
 			break
-		var result: Dictionary = await stack.resolve_batch()
+		var entry: Dictionary = stack.top()
+		var result: Dictionary = await stack.resolve_one()
+		if String(entry.get("type", "")) == "pending_roll":
+			last_roll = result
 		if not result.is_empty():
 			last_result = result
+	if not last_roll.is_empty():
+		return last_roll
 	return last_result
 
 ## One switch resolving every entry type; wired as EventStack.resolver.

@@ -8,9 +8,11 @@ extends RefCounted
 ##   request_death    -> await player_death_resolved  (player_died is emitted
 ##                       by the controller, which owns the penalty data)
 ##
-## This is deliberately a thin adapter: the hotseat UI keeps working unchanged
-## while the engine no longer knows EventBus exists for input. In milestone 3
-## a SocketDriver replaces this class on the server; the engine does not change.
+## This is deliberately a thin adapter: the engine no longer knows EventBus
+## exists for input. M1 used it for the hotseat scene; since M2 the scene speaks
+## the protocol through CommandDriver (scripts/core/drivers/command_driver.gd),
+## which is the same contract with messages/commands instead of signals. This
+## file stays as the reference "simplest possible interactive driver".
 ##
 ## Not a class_name on purpose (headless CLI): preload it.
 

@@ -11,26 +11,25 @@ extends RefCounted
 ##    "effect": "reroll"|"adjust", "item_id"/"item_name", ["delta": +-1,
 ##    "applied": true]}                            (D6 / Belial Book responses)
 ##
-## resolve_batch() resolves the entries that were ON THE STACK when the
-## priority window closed, strictly top-first (LIFO), without reopening the
-## window between them (ESEMPIO 2 step 3: the D6 modifier resolves, then r1
-## resolves with its updated value).
+## resolve_one() resolves EXACTLY ONE entry: the one on top when the priority
+## window closed. That is the Comprehensive Rules behaviour (same as MTG): a
+## round of consecutive passes resolves a single stack object, never the whole
+## stack. Everything still below stays on the stack and the controller opens a
+## FRESH priority window for it before it resolves — so a player who drew a
+## card in response can play it against the entry underneath, and a +2
+## modifier's new value can be answered before the roll resolves.
 ##
-## It deliberately does NOT assume what the entries are: the old version
+## It deliberately does NOT assume what the entry is: the old version
 ## hardcoded "modifier, then its pending_roll", which meant an effect that
 ## pushed a NEW entry while resolving had nowhere to go and was destroyed by
 ## reset_combat_state() (audit C1). Resolution is delegated to the `resolver`
 ## Callable owned by the controller; this class only owns ORDER.
 ##
-## Entries pushed DURING a batch are appended on top and therefore resolved
-## inside the same batch (the batch counter is fixed at window close), while
-## anything still below them is left for the controller's outer resolution
-## loop, which opens a fresh window for it (ratifica #3: recursive
-## multi-effect resolution).
+## Entries pushed WHILE the top resolves appear on top and therefore get their
+## own window (and their own single resolution) from the controller's loop:
+## recursive multi-effect resolution without ever resolving a block at once.
 
 signal changed()
-
-const MAX_RESOLUTIONS_PER_BATCH := 64
 
 var entries: Array = []            # LIFO — last element is the top
 var resolver: Callable = Callable()  # func(entry: Dictionary) -> Dictionary
@@ -87,26 +86,13 @@ func clear(reason: String = "") -> void:
 	EventBus.stack_cleared.emit(reason)
 	changed.emit()
 
-## Resolves the entries present when the window closed, top-first.
-## Returns the last pending_roll result if one resolved (the hit/miss the
-## attack flow needs), otherwise the last result produced.
-func resolve_batch() -> Dictionary:
-	var batch: int = entries.size()
-	var last_roll: Dictionary = {}
-	var last_result: Dictionary = {}
-	var guard: int = 0
-	while batch > 0 and not entries.is_empty():
-		guard += 1
-		if guard > MAX_RESOLUTIONS_PER_BATCH:
-			Log.error("EventStack: resolution guard tripped (%d entries) — aborting the batch" % entries.size())
-			break
-		var entry: Dictionary = pop()
-		var result: Dictionary = await resolver.call(entry)
-		EventBus.stack_entry_resolved.emit(entry.duplicate(), result.duplicate())
-		last_result = result
-		if entry.get("type", "") == "pending_roll":
-			last_roll = result
-		batch -= 1
-	if not last_roll.is_empty():
-		return last_roll
-	return last_result
+## Resolves ONLY the top entry (LIFO) and returns its result. The caller is
+## responsible for reopening a priority window if anything is left: this
+## class never resolves a block, because one round of passes = one resolution.
+func resolve_one() -> Dictionary:
+	if entries.is_empty():
+		return {}
+	var entry: Dictionary = pop()
+	var result: Dictionary = await resolver.call(entry)
+	EventBus.stack_entry_resolved.emit(entry.duplicate(), result.duplicate())
+	return result
