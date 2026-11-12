@@ -51,6 +51,19 @@ signal player_damaged(player_id: int, amount: int, source_id: String)
 signal priority_pending(player_id: int, stack_type: String, payload: Dictionary)
 signal priority_given(player_id: int, response: Dictionary)
 signal priority_closed(stack_type: String, payload: Dictionary)
+## M4: the reaction window is a 2.0 s countdown. `round_closed` fires when the
+## round ends (someone answered or the countdown expired): clients drop the
+## modal and the table empties its timer bar.
+signal priority_round_opened(requests: int, window_ms: int)
+signal priority_round_closed(reason: String)
+
+# --- Trigger engine (M4, data-driven effect_trigger/effect_condition) --------
+## A card trigger entered the stack: {card_id, source, owner, trigger, ...}.
+signal trigger_pushed(entry: Dictionary)
+signal trigger_resolved(entry: Dictionary, result: Dictionary)
+## A stack entry lost its target before resolving (the monster was killed in
+## response): it applies NOTHING and this is the auditable trace.
+signal effect_fizzled(owner_id: int, card_id: String, reason: String)
 
 # --- Event stack (MP07 build): typed LIFO queue --------------------------------
 ## Entries are Dictionaries: {"type", "id", ...type fields}. The controller

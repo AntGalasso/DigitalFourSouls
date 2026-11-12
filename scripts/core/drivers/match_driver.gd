@@ -39,6 +39,39 @@ func decide_priority(_request: Dictionary) -> Dictionary:
 func request_priority(request: Dictionary) -> Dictionary:
 	return decide_priority(request)
 
+## M4 REFLEXES — one reaction round, every eligible player asked at once.
+## The driver owns the transport (and, in CommandDriver, the 2.0 s countdown);
+## it returns the FIRST real answer ("loot" | "eternal") or {} when nobody
+## reacts in time. This default keeps the sequential policy for robot/tests.
+func request_priority_round(requests: Array) -> Dictionary:
+	for request in requests:
+		var answer: Dictionary = {}
+		if is_interactive():
+			answer = await request_priority(request)
+		else:
+			answer = decide_priority(request)
+		var action: String = String(answer.get("action", "pass"))
+		if action == "loot" or action == "eternal":
+			return answer
+	return {}
+
+## How long the reaction window lasts (0 = no countdown, e.g. hotseat).
+func window_total_ms() -> int:
+	return 0
+
+## What is left of the countdown RIGHT NOW (0 when no window is open).
+## Clients animate a bar from this value; the server is the only clock.
+func window_remaining_ms() -> int:
+	return 0
+
+## Freeze the countdown while a player is choosing a target: no auto-pass may
+## fire while a human is looking at the table.
+func pause_window() -> void:
+	pass
+
+func resume_window() -> void:
+	pass
+
 ## Automatic death-penalty policy: {"loot_id": String, "item_id": String}.
 ## Returning {} means "no choice" — the engine then applies the documented
 ## fallback (automatic only when there is exactly one legal option).

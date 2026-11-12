@@ -27,6 +27,11 @@ const state = {
   log: [],
   net: 'connessione…',
   retry: 0,
+  // M4: the reaction countdown. The SERVER is the clock; this only animates
+  // the bar between two snapshots.
+  window: null,
+  rotated: new Set(),
+  swipedAt: 0,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -166,13 +171,18 @@ function handleMessage(msg) {
     case 'STATE_SNAPSHOT':
       state.snapshot = payload.snapshot || null;
       state.legal = payload.legal || {};
-      if (String(payload.window_kind || '') === '') state.prompt = null;
+      if (String(payload.window_kind || '') === '') {
+        state.prompt = null;
+        state.window = null;
+      }
       break;
     case 'PRIORITY_REQUEST':
       state.prompt = Object.assign({ kind: 'priority' }, payload);
+      state.window = makeWindow(payload);
       break;
     case 'TARGET_REQUEST':
       state.prompt = Object.assign({ kind: 'target' }, payload);
+      state.window = null;   // the countdown is PAUSED while you pick
       break;
     case 'DEATH_PENALTY_REQUEST':
       state.prompt = Object.assign({ kind: 'death' }, payload);
@@ -188,6 +198,39 @@ function handleMessage(msg) {
       break;
   }
   render();
+}
+
+/** Server-provided countdown: {total, remaining, at} (ms, monotonic-ish). */
+function makeWindow(payload) {
+  const total = Number(payload.window_total_ms || 0);
+  if (total <= 0) return null;
+  const remaining = Number(payload.window_remaining_ms ?? total);
+  return { total, remaining, at: performance.now() };
+}
+
+function windowLeftMs() {
+  const w = state.window;
+  if (!w) return 0;
+  return Math.max(0, w.remaining - (performance.now() - w.at));
+}
+
+/** Keeps the bar fluid and drops the modal when the server's clock runs out. */
+function tickCountdown() {
+  const box = document.querySelector('.countdown');
+  const left = windowLeftMs();
+  if (box && state.window) {
+    const pct = state.window.total > 0 ? (left / state.window.total) * 100 : 0;
+    const bar = box.querySelector('i');
+    const label = box.querySelector('span');
+    if (bar) bar.style.width = pct + '%';
+    if (label) label.textContent = (left / 1000).toFixed(1) + ' s';
+    box.classList.toggle('urgent', left < 600);
+  }
+  if (state.prompt && state.window && left <= 0) {
+    state.prompt = null;
+    state.window = null;
+    render();
+  }
 }
 
 function addLog(payload) {
@@ -206,6 +249,9 @@ function addLog(payload) {
     eternal_used: `${who} attiva ${card}`,
     souls_changed: `${who}: anime ${data.total_value}/4`,
     turn_started: `— turno di ${who} —`,
+    trigger_pushed: `trigger: ${pretty(data.card_id)} (${data.trigger})`,
+    effect_fizzled: `${pretty(data.card_id)} fizzla: bersaglio sparito`,
+    target_expired: 'scelta del bersaglio scaduta',
     game_won: `*** ${who} VINCE ***`,
   }[String(payload.event || '')];
   if (!text) return;
@@ -255,7 +301,7 @@ function boardHtml() {
     monstersHtml(s),
     shopHtml(s),
     handHtml(me),
-    itemsHtml(),
+    itemsHtml(me),
     `<button class="wide" data-action="end-turn" ${state.legal.can_end_turn ? '' : 'disabled'}>Fine turno</button>`,
     logHtml(),
   ].join('');
@@ -343,23 +389,41 @@ function handHtml(me) {
       <h3>La tua mano</h3>
       <div class="grid">
         ${me.hand.map((cardId) => `
-          <button class="card" data-action="play" data-card="${esc(cardId)}" ${playable.has(cardId) ? '' : 'disabled'}>
-            ${esc(pretty(cardId))}
+          <button class="card playable" data-action="play" data-card="${esc(cardId)}" ${playable.has(cardId) ? '' : 'disabled'}>
+            <strong>${esc(pretty(cardId))}</strong>
+            <small>${playable.has(cardId) ? 'trascina in alto per giocare' : 'non giocabile ora'}</small>
           </button>`).join('')}
       </div>
-      ${playable.size ? '' : '<p class="hint">Nessuna Loot giocabile ora: serve una finestra di priorità o la tua fase azione con il personaggio pronto.</p>'}
+      ${playable.size ? '<p class="hint">Swipe verso l’alto (o tap) per lanciare la carta sul tavolo.</p>' : '<p class="hint">Nessuna Loot giocabile ora: serve una finestra di priorità o la tua fase azione con il personaggio pronto.</p>'}
     </section>`;
 }
 
-function itemsHtml() {
-  const items = state.legal.items_playable || [];
-  if (!items.length) return '';
+/** "I miei oggetti": tap = rotate 90° (tap state), playable ones also fire. */
+function itemsHtml(me) {
+  if (!me) return '';
+  const owned = me.items_passive || [];
+  const eternal = me.eternal_item_id || '';
+  if (!owned.length && !eternal) return '';
+  const playable = new Set(state.legal.items_playable || []);
+  const spent = new Set(me.tapped_items || []);
+  const card = (id, label, isTapped, usable) => `
+    <button class="item${isTapped ? ' tapped' : ''}" data-action="tap-item" data-card="${esc(id)}">
+      <strong>${esc(pretty(id))}</strong>
+      <small>${label}</small>
+    </button>`;
+  const eternalCard = eternal
+    ? card(eternal, me.eternal_used ? 'eterno · scarico' : 'eterno · pronto',
+        me.eternal_used || state.rotated.has(eternal), false)
+    : '';
   return `
     <section class="panel">
-      <h3>Oggetti attivi</h3>
+      <h3>I miei oggetti</h3>
       <div class="grid">
-        ${items.map((cardId) => `<button class="card" data-action="item" data-card="${esc(cardId)}">${esc(pretty(cardId))}</button>`).join('')}
+        ${eternalCard}
+        ${owned.map((id) => card(id, playable.has(id) ? 'tap = attiva' : 'tap = gira',
+          spent.has(id) || state.rotated.has(id), playable.has(id))).join('')}
       </div>
+      <p class="hint">Tap su un oggetto: lo giri di 90° (tappato).</p>
     </section>`;
 }
 
@@ -392,11 +456,28 @@ function priorityModal(prompt) {
     if (action.action === 'resolve') return `<button class="secondary" data-action="resolve">Risolvi</button>`;
     return '';
   }).join('');
+  const total = Number(prompt.window_total_ms || 0);
+  const countdown = total > 0
+    ? `<div class="countdown"><div class="track"><i style="width:100%"></i></div><span>${(total / 1000).toFixed(1)} s</span></div>`
+    : '';
   return wrap(`
     <h2>Priorità: ${esc(prompt.stack_type)}</h2>
-    <p class="hint">${esc(pretty((prompt.entry || {}).card_id || ''))} — rispondi o passa.</p>
+    ${countdown}
+    <p class="hint">${esc(stackHint(prompt))}</p>
     ${actions}
-    <button class="wide secondary" data-action="pass">Passa priorità</button>`);
+    <button class="wide secondary" data-action="pass">Passa subito</button>`);
+}
+
+/** What is actually on top of the pile, in words a player reads fast. */
+function stackHint(prompt) {
+  const entry = prompt.entry || {};
+  if (prompt.stack_type === 'pending_roll') {
+    return `Tiro pendente: ${entry.value} vs dado ${entry.die_value} — reagisci ora o lascia scadere.`;
+  }
+  if (prompt.stack_type === 'trigger') {
+    return `Trigger di ${pretty(entry.card_id)} (${entry.trigger || ''}) — reagisci ora o lascia scadere.`;
+  }
+  return `${pretty(entry.card_id || '')} — reagisci ora o lascia scadere.`;
 }
 
 function eternalButtons(action) {
@@ -483,9 +564,20 @@ document.addEventListener('click', (event) => {
       send('BUY_SHOP', { slot: Number(node.dataset.slot) });
       break;
     case 'play':
+      // A swipe already played this card: do not play it twice on the click.
+      if (Date.now() - state.swipedAt < 400) break;
+      send('PLAY_LOOT', { card_id: node.dataset.card });
+      break;
     case 'item':
       send('PLAY_LOOT', { card_id: node.dataset.card });
       break;
+    case 'tap-item': {
+      const id = node.dataset.card;
+      if (state.rotated.has(id)) state.rotated.delete(id);
+      else state.rotated.add(id);
+      if ((state.legal.items_playable || []).includes(id)) send('PLAY_LOOT', { card_id: id });
+      break;
+    }
     case 'attack':
       send('DECLARE_ATTACK', { target_id: node.dataset.monster });
       break;
@@ -529,6 +621,43 @@ document.addEventListener('click', (event) => {
   }
   render();
 });
+
+// --- Swipe-up: drag a loot card towards the table --------------------------
+
+let drag = null;
+
+document.addEventListener('pointerdown', (event) => {
+  const card = event.target.closest('[data-action="play"]');
+  if (!card || card.disabled) return;
+  drag = { card, startY: event.clientY, startX: event.clientX, id: event.pointerId };
+  try { card.setPointerCapture(event.pointerId); } catch (err) { /* older browsers */ }
+});
+
+document.addEventListener('pointermove', (event) => {
+  if (!drag || event.pointerId !== drag.id) return;
+  const dy = event.clientY - drag.startY;
+  const dx = event.clientX - drag.startX;
+  if (dy < 0 && Math.abs(dy) > Math.abs(dx)) {
+    event.preventDefault();
+    drag.card.style.transform = `translateY(${dy}px)`;
+    drag.card.classList.toggle('armed', dy < -70);
+  }
+});
+
+document.addEventListener('pointerup', (event) => {
+  if (!drag || event.pointerId !== drag.id) return;
+  const dy = event.clientY - drag.startY;
+  const card = drag.card;
+  drag = null;
+  card.style.transform = '';
+  card.classList.remove('armed');
+  if (dy < -70) {
+    state.swipedAt = Date.now();
+    send('PLAY_LOOT', { card_id: card.dataset.card });
+  }
+});
+
+setInterval(tickCountdown, 80);
 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && (!state.ws || state.ws.readyState !== WebSocket.OPEN)) {

@@ -35,6 +35,12 @@ const CARD_DIR := "res://resources/cards/base_set/"
 const EventStackScript := preload("res://scripts/core/event_stack.gd")
 const MatchStateScript := preload("res://scripts/core/match_state.gd")
 const LocalUiDriverScript := preload("res://scripts/core/drivers/local_ui_driver.gd")
+const TriggerEngineScript := preload("res://scripts/core/trigger_engine.gd")
+
+## M4: the reaction window. Every stack entry opens this countdown; when it
+## expires nobody could (or wanted to) answer and the entry resolves. `0`
+## disables it (hotseat: a human reading the screen must not be auto-passed).
+const DEFAULT_PRIORITY_WINDOW_MS := 2000
 
 const MONSTER_SLOTS := 2      # base slots; the table is a LIST so future cards
 const SHOP_SLOTS := 2         # or events can add a slot without a refactor
@@ -51,6 +57,10 @@ var driver = null
 var stack = null
 
 var total_cards_at_setup := 0
+## M4 reaction window, in milliseconds (copied to the driver by MatchSession).
+var priority_window_ms: int = DEFAULT_PRIORITY_WINDOW_MS
+## M4 data-driven triggers (effect_trigger / effect_condition in the .tres).
+var trigger_engine = null
 
 ## Resolution locks. They are NOT match data: they only exist while the engine
 ## is inside an attack/loot resolution in this process.
@@ -73,6 +83,7 @@ func setup(player_count: int, seed_value: int, p_driver = null) -> void:
 	GameState.adopt(state)
 	stack = EventStackScript.new()
 	stack.resolver = _resolve_stack_entry
+	trigger_engine = TriggerEngineScript.new()
 	EventBus.monster_damaged.connect(_on_monster_damaged)
 	EventBus.monster_killed.connect(_on_monster_killed)
 	_build_decks()
@@ -94,6 +105,7 @@ func teardown() -> void:
 		stack.resolver = Callable()
 		stack = null
 	CardEffectRegistry.reset()
+	trigger_engine = null
 	GameState.clear()
 	state = MatchStateScript.new()
 	_combat_in_progress = false
@@ -112,7 +124,39 @@ func snapshot_for(viewer_player_id: int) -> Dictionary:
 	snapshot["pending_roll"] = get_pending_roll()
 	snapshot["combat_in_progress"] = _combat_in_progress
 	snapshot["stack_size"] = stack.size() if stack != null else 0
+	snapshot["stack"] = public_stack()
 	return snapshot
+
+## The stack as the TABLE may see it (bottom first): who played what, and on
+## what. No hands, no deck contents — only the public pile.
+func public_stack() -> Array:
+	var out: Array = []
+	if stack == null:
+		return out
+	for raw_entry in stack.entries:
+		var entry: Dictionary = raw_entry
+		var item := {
+			"id": String(entry.get("id", "")),
+			"type": String(entry.get("type", "")),
+			"owner": int(entry.get("owner", -1)),
+			"card_id": String(entry.get("card_id", "")),
+		}
+		match String(entry.get("type", "")):
+			"pending_roll":
+				item["value"] = int(entry.get("value", 0))
+				item["die_value"] = int(entry.get("die_value", 0))
+				item["target"] = String(entry.get("target", ""))
+			"modifier":
+				item["item_name"] = String(entry.get("item_name", ""))
+				item["effect"] = String(entry.get("effect", ""))
+				item["target_id"] = String(entry.get("target_id", ""))
+			"pending_effect":
+				item["target_id"] = String((entry.get("payload", {}) as Dictionary).get("target_id", ""))
+			"trigger":
+				item["trigger"] = String(entry.get("trigger", ""))
+				item["target_id"] = String(entry.get("target_id", ""))
+		out.append(item)
+	return out
 
 # --- State accessors (kept as properties so drivers/tests do not change) ------
 
@@ -148,8 +192,15 @@ func begin_turn(player_id: int) -> void:
 	p["character_tapped"] = false          # untap: start phase of the OWNER's turn
 	p["tapped_items"] = []                  # items spent by the death penalty untap
 	p["eternal_used"] = false
-	draw_loot(player_id)
+	var skip_draws: int = int(p.get("skip_draw", 0))
+	if skip_draws > 0:
+		# A trigger (e.g. Fistula dying) can make you draw less loot.
+		p["skip_draw"] = skip_draws - 1
+		print("  %s skips this turn's loot draw (trigger)" % _pname(player_id))
+	else:
+		draw_loot(player_id)
 	EventBus.turn_started.emit(player_id)
+	_push_triggers("on_turn_start", {"attacker": player_id, "owner": player_id})
 	state.phase = MatchStateScript.PHASE_ACTION
 
 ## Player-initiated end of turn. Runs the ENDING PHASE (which always ends
@@ -453,55 +504,58 @@ func draw_loot(player_id: int) -> CardResource:
 ## answer with are auto-passed. A response restarts the round from the active
 ## player; consecutive passes close the window.
 func _run_stack_window(entry: Dictionary) -> void:
-	var count: int = state.players.size()
-	if count == 0:
+	if stack == null or stack.is_empty():
 		return
-	var idx: int = state.current_player_index
-	var passes: int = 0
-	while passes < count:
-		if stack == null or stack.is_empty():
-			break
-		# A response may have pushed a new entry on top: every subsequent ask
-		# (and its legal-action list) must be about the CURRENT top.
-		entry = stack.top()
-		if not _player_has_response(idx, entry):
-			print("%s passes priority on %s (no responses available)" % [
-				_pname(idx), stack.top().get("id", "?")])
-			passes += 1
-			idx = (idx + 1) % count
+	var current: Dictionary = stack.top()
+	# M4 REFLEXES: every player WITH a response is asked AT THE SAME TIME
+	# (APNAP order for determinism), so nobody waits for their "turn to speak"
+	# inside the 2.0 s countdown. The first real answer wins; when the countdown
+	# expires the window closes and the controller resolves the top.
+	var requests: Array = []
+	var count: int = state.players.size()
+	# No countdown = local hotseat: ONE screen at a time, so only the first
+	# player with a response is asked (the old sequential behaviour).
+	var sequential: bool = priority_window_ms <= 0
+	for offset in range(count):
+		var idx: int = (state.current_player_index + offset) % count
+		if not _player_has_response(idx, current):
 			continue
-		var request: Dictionary = _build_priority_request(idx, entry)
-		# Notification for observers (UI, logs, future spectating). Unlike the
-		# old design this signal is NOT the input channel: the answer comes
-		# back through the driver, bound to this request id.
-		EventBus.priority_pending.emit(idx, String(entry.get("type", "")), entry.duplicate(true))
-		var response: Dictionary = await _ask_priority(request)
-		var acted: bool = false
-		var action: String = String(response.get("action", "pass"))
-		match action:
+		requests.append(_build_priority_request(idx, current))
+		if sequential:
+			break
+	if requests.is_empty():
+		# Nobody can answer: no window to show, the stack resolves immediately.
+		if stack != null:
+			EventBus.priority_closed.emit(String(current.get("type", "")), current.duplicate(true))
+		return
+	for request in requests:
+		EventBus.priority_pending.emit(int(request.get("player_id", -1)),
+			String(current.get("type", "")), current.duplicate(true))
+	EventBus.priority_round_opened.emit(requests.size(), priority_window_ms)
+	var response: Dictionary = await _ask_priority_round(requests)
+	var acted: bool = false
+	var responder: int = int(response.get("player_id", -1))
+	if responder >= 0 and _is_real_action(response):
+		match String(response.get("action", "pass")):
 			"loot":
 				var card: CardResource = card_resource(String(response.get("card_id", "")))
-				if card != null and _play_loot_in_priority(card, idx, String(response.get("target_id", ""))):
+				if card != null and _play_loot_in_priority(card, responder, String(response.get("target_id", ""))):
 					acted = true
-					print("  [priority] %s responds: plays %s" % [_pname(idx), card.display_name])
+					print("  [priority] %s responds: plays %s" % [_pname(responder), card.display_name])
 			"eternal":
-				var res: Dictionary = use_eternal_item(idx, response.get("payload", {}))
+				var res: Dictionary = use_eternal_item(responder, response.get("payload", {}))
 				if res.get("ok", false):
 					acted = true
-					print("  [priority] %s responds: uses %s" % [_pname(idx), res.get("item_id", "?")])
+					print("  [priority] %s responds: uses %s" % [_pname(responder), res.get("item_id", "?")])
 			"stop":
 				print("  [priority] 'stop attack' is NOT a rule (MP07 D) — the attack continues")
 			_:
-				pass  # "pass" / "resolve" / unknown
-		if acted:
-			passes = 0
-			idx = state.current_player_index
-		else:
-			print("%s passes priority on %s" % [_pname(idx), stack.top().get("id", "?")])
-			passes += 1
-			idx = (idx + 1) % count
+				pass
+	else:
+		print("priority on %s: no reaction in %d ms" % [String(current.get("id", "?")), priority_window_ms])
+	EventBus.priority_round_closed.emit("answered" if acted else ("expired" if responder < 0 else "passed"))
 	if stack != null:
-		EventBus.priority_closed.emit(String(entry.get("type", "")), entry.duplicate(true))
+		EventBus.priority_closed.emit(String(current.get("type", "")), current.duplicate(true))
 
 ## Builds the immutable request handed to the driver. It contains everything a
 ## client needs to render the window and nothing it must not know (no other
@@ -517,7 +571,53 @@ func _build_priority_request(player_id: int, entry: Dictionary) -> Dictionary:
 		"legal_actions": _legal_actions(player_id, entry),
 		"phase": state.phase,
 		"turn_player_id": state.current_player_index,
+		"window_total_ms": priority_window_ms,
 	}
+
+## M4: ONE round, ALL the players with a response asked at once. The driver
+## owns the transport (and the 2.0 s countdown); this method only validates
+## that the winning answer belongs to a request that is really open.
+func _ask_priority_round(requests: Array) -> Dictionary:
+	if driver == null:
+		return {}
+	if driver.has_method("request_priority_round"):
+		var raw = await driver.request_priority_round(requests)
+		if typeof(raw) != TYPE_DICTIONARY or (raw as Dictionary).is_empty():
+			return {}
+		return _validate_round_response(requests, raw)
+	# Legacy per-request driver: ask in APNAP order, first real action wins.
+	for request in requests:
+		var candidate: Dictionary = await _ask_priority(request)
+		if _is_real_action(candidate):
+			return candidate
+	return {}
+
+## "loot" and "eternal" are the only answers that DO something; "resolve",
+## "pass" and unknown strings just close this player's chance.
+func _is_real_action(response: Dictionary) -> bool:
+	var action: String = String(response.get("action", "pass"))
+	return action == "loot" or action == "eternal"
+
+## A round answer must carry the request_id of one of the open requests AND
+## that request's player: anything else is dropped (defence in depth — the
+## transport already rejects it).
+func _validate_round_response(requests: Array, response: Dictionary) -> Dictionary:
+	for raw_request in requests:
+		var request: Dictionary = raw_request
+		if String(request.get("request_id", "")) != String(response.get("request_id", "")):
+			continue
+		if int(request.get("player_id", -1)) != int(response.get("player_id", -1)):
+			break
+		return {
+			"action": String(response.get("action", "pass")),
+			"card_id": String(response.get("card_id", "")),
+			"target_id": String(response.get("target_id", "")),
+			"payload": (response.get("payload", {}) as Dictionary).duplicate(true),
+			"request_id": String(request["request_id"]),
+			"player_id": int(request["player_id"]),
+		}
+	Log.warn("MatchController: round answer does not match any open request — ignored")
+	return {}
 
 ## Asks the driver and validates the answer. Anything that is not a Dictionary
 ## bound to THIS request and THIS player becomes a pass (never an action).
@@ -710,9 +810,37 @@ func _resolve_stack_entry(entry: Dictionary) -> Dictionary:
 			return _resolve_modifier(entry)
 		"pending_effect":
 			return await _resolve_pending_effect(entry)
+		"trigger":
+			return _resolve_trigger(entry)
 		_:
 			Log.warn("MatchController: unknown stack entry type '%s'" % String(entry.get("type", "")))
 			return {}
+
+## M4: resolves one data-driven trigger (see trigger_engine.gd). A trigger
+## whose target is gone FIZZLES: it applies nothing and says so on the bus.
+func _resolve_trigger(entry: Dictionary) -> Dictionary:
+	if trigger_engine == null:
+		return {"applied": false}
+	var result: Dictionary = trigger_engine.resolve(entry, state)
+	if bool(result.get("fizzled", false)):
+		EventBus.effect_fizzled.emit(int(entry.get("owner", 0)),
+			String(entry.get("card_id", "")), String(result.get("reason", "target_gone")))
+		print("%s trigger fizzles (target gone)" % String(entry.get("card_id", "?")))
+	EventBus.trigger_resolved.emit(entry.duplicate(true), result.duplicate(true))
+	return result
+
+## Collects the cards whose data matches `trigger_name` and pushes them on the
+## stack in APNAP order. Returns how many entries were pushed.
+func _push_triggers(trigger_name: String, context: Dictionary) -> int:
+	if trigger_engine == null or stack == null:
+		return 0
+	var entries: Array = trigger_engine.collect(trigger_name, context, state)
+	if entries.is_empty():
+		return 0
+	trigger_engine.push_all(entries, stack)
+	print("  trigger '%s': %d entr%s on the stack (APNAP)" % [
+		trigger_name, entries.size(), "y" if entries.size() == 1 else "ies"])
+	return entries.size()
 
 ## ESEMPIO 2 step 3 / 2b step 4: compare the (possibly modified) value with
 ## the monster's die value and log the canonical line.
@@ -729,6 +857,16 @@ func _resolve_pending_roll(entry: Dictionary) -> Dictionary:
 	EventBus.monster_attacked.emit(int(entry.get("owner", 0)), target, value, int(entry.get("bonus", 0)), die_value)
 	if target != "":
 		CardEffectRegistry.notify_monster_attacked(target, int(entry.get("owner", 0)), value)
+	# M4: the roll is public data now — on_roll / on_miss triggers go on the
+	# stack and get a reaction window before the attack continues.
+	var trigger_context := {
+		"roll": value, "die_value": die_value, "hit": hit,
+		"attacker": int(entry.get("owner", 0)), "instance_id": target,
+		"active_player": state.current_player_index,
+	}
+	_push_triggers("on_roll", trigger_context)
+	if not hit:
+		_push_triggers("on_miss", trigger_context)
 	return {"hit": hit, "roll": value, "die_value": die_value}
 
 ## Modifier resolution: reroll executes NOW (deferred from activation),
@@ -759,12 +897,25 @@ func _resolve_pending_effect(entry: Dictionary) -> Dictionary:
 	var target_id: String = String(payload.get("target_id", ""))
 	var target: Dictionary = _find_monster(target_id)
 	var target_name: String = target["card"].display_name if not target.is_empty() else target_id
+	# M4 FIZZLING: the target may have been killed by a faster response. The
+	# effect then applies NOTHING (and the log says why) instead of hitting a
+	# monster that is no longer there.
+	if target_id != "" and target.is_empty():
+		EventBus.effect_fizzled.emit(int(entry.get("owner", 0)), card.id, "target_gone")
+		print("%s fizzles: '%s' is no longer on the table" % [card.display_name, target_id])
+		return {"applied": false, "fizzled": true, "reason": "target_gone"}
 	CardEffectRegistry.play_card(card, int(entry.get("owner", 0)), payload)
 	if card.simple_effect == "damage_monster":
 		print("%s resolves: %s takes %d damage" % [card.display_name, target_name, card.simple_effect_value])
 	else:
 		print("%s resolves" % card.display_name)
 	EventBus.card_played.emit(int(entry.get("owner", 0)), card.id)
+	# M4: "when you play a card" passives enter the stack and are answerable.
+	_push_triggers("on_card_played", {
+		"attacker": int(entry.get("owner", 0)),
+		"active_player": state.current_player_index,
+		"card_id": card.id,
+	})
 	return {"applied": true, "card_id": card.id}
 
 ## ESEMPIO 3 step 4 — called on EVERY attack exit path (kill OR player death):
@@ -1037,6 +1188,17 @@ func _on_monster_killed(player_id: int, instance_id: String, rewards: Dictionary
 	state.last_killed_monster = monster.get("card", CardResource.new()).display_name if not monster.is_empty() else instance_id
 	CardEffectRegistry.notify_monster_killed(instance_id, player_id)
 	CardEffectRegistry.unregister_monster(instance_id)
+	# M4: ONE choke point for every kill (attack or card effect). The death
+	# triggers go on the stack and get their own reaction window.
+	_push_triggers("on_death", {
+		"instance_id": instance_id, "attacker": player_id,
+		"active_player": state.current_player_index,
+		"card_id": String(monster.get("card", CardResource.new()).id),
+	})
+	_push_triggers("on_monster_killed", {
+		"instance_id": instance_id, "attacker": player_id,
+		"active_player": state.current_player_index,
+	})
 	state.monster_shields.erase(instance_id)
 	for i in range(state.table_monsters.size()):
 		if state.table_monsters[i]["instance_id"] == instance_id:

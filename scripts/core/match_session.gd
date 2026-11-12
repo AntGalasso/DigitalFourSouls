@@ -36,6 +36,14 @@ signal changed()
 var controller = null
 var driver = null
 
+## M4: the reaction window handed to the transport. 2000 ms in the phone game;
+## 0 disables the countdown (hotseat: a human must not be auto-passed).
+var priority_window_ms: int = 2000
+## Safety net while a phone picks a target: the countdown is paused, but the
+## game must not hang forever if that phone walks away.
+var target_timeout_ms: int = 30000
+var _target_timer_generation: int = 0
+
 ## A command that needs a target: {command, request_id, card_id, command_type}.
 var _pending_target: Dictionary = {}
 var _domain_connected: bool = false
@@ -47,7 +55,10 @@ func start(player_count: int, seed_value: int) -> void:
 	controller = ControllerScript.new()
 	driver = CommandDriverScript.new()
 	driver.message_sink = _on_driver_message
+	controller.priority_window_ms = priority_window_ms
 	controller.setup(player_count, seed_value, driver)
+	if driver != null:
+		driver.window_ms = priority_window_ms
 	_connect_domain()
 	controller.begin_turn(0)
 	# The first turn is announced like every other one, so a client never has to
@@ -175,15 +186,20 @@ func _request_target(cmd: Dictionary, card_id: String) -> void:
 			"die_value": card.die_value,
 			"hp": int(monster["hp"]),
 		})
+	var request_id: String = String(cmd.get("request_id", ""))
 	_pending_target = {
 		"command": cmd.duplicate(true),
-		"request_id": String(cmd.get("request_id", "")),
+		"request_id": request_id,
 		"card_id": card_id,
 		"command_type": String(cmd.get("type", "")),
 		"options": options.duplicate(true),
 	}
-	_emit(Protocol.target_request(
-		String(cmd.get("request_id", "")), int(cmd.get("player_id", -1)),
+	# M4: freeze the reaction countdown while the target is being chosen — no
+	# auto-pass may fire while a human is looking at the table.
+	if driver != null:
+		driver.pause_window()
+	_start_target_timeout()
+	_emit(Protocol.target_request(request_id, int(cmd.get("player_id", -1)),
 		String(cmd.get("type", "")), card_id, options))
 
 func _complete_target(cmd: Dictionary) -> Dictionary:
@@ -194,6 +210,9 @@ func _complete_target(cmd: Dictionary) -> Dictionary:
 	if wanted_id != String(cmd.get("request_id", "")):
 		return {"ok": false, "error": "stale_target_request"}
 	_pending_target = {}
+	_target_timer_generation += 1
+	if driver != null:
+		driver.resume_window()
 	var target_id: String = String(cmd.get("payload", {}).get("target_id", ""))
 	if target_id == "":
 		# empty target = the player cancelled the selection
@@ -212,8 +231,16 @@ func emit_snapshot() -> void:
 		return
 	var viewer: int = _viewer()
 	_emit(Protocol.state_snapshot(
-		controller.snapshot_for(viewer), controller.ui_actions(viewer), driver.window_kind()))
+		controller.snapshot_for(viewer), controller.ui_actions(viewer), driver.window_kind(),
+		window_remaining_ms(), window_total_ms()))
 	changed.emit()
+
+## M4: the countdown the clients animate. The server is the only clock.
+func window_remaining_ms() -> int:
+	return driver.window_remaining_ms() if driver != null else 0
+
+func window_total_ms() -> int:
+	return driver.window_total_ms() if driver != null else 0
 
 func _viewer() -> int:
 	if driver != null and driver.has_window():
@@ -234,23 +261,16 @@ func snapshot_message(viewer: int) -> Dictionary:
 	if controller == null:
 		return {}
 	return Protocol.state_snapshot(
-		controller.snapshot_for(viewer), controller.ui_actions(viewer), window_kind())
+		controller.snapshot_for(viewer), controller.ui_actions(viewer), window_kind(),
+		window_remaining_ms(), window_total_ms())
 
 ## The request this player owes an answer to RIGHT NOW ({} if none). A phone
 ## that reloads the page gets its pending prompt back instead of a dead screen.
 func pending_prompt(player_id: int) -> Dictionary:
 	if driver == null:
 		return {}
-	if driver.window_kind() == "priority":
-		var request: Dictionary = driver.pending_request()
-		if int(request.get("player_id", -1)) != player_id:
-			return {}
-		return Protocol.priority_request(request)
-	if driver.window_kind() == "death":
-		var death: Dictionary = driver.pending_request()
-		if int(death.get("player_id", -1)) != player_id:
-			return {}
-		return Protocol.death_request(death)
+	# M4: a pending TARGET comes first — while the player is choosing, that is
+	# the prompt they owe (the window behind it is paused, not answerable).
 	if not _pending_target.is_empty():
 		var pending_command: Dictionary = _pending_target.get("command", {})
 		if int(pending_command.get("player_id", -1)) == player_id:
@@ -259,7 +279,41 @@ func pending_prompt(player_id: int) -> Dictionary:
 				String(_pending_target.get("command_type", "")),
 				String(_pending_target.get("card_id", "")),
 				_pending_target.get("options", []))
+	if driver.window_kind() == "priority":
+		# M4: the round is per player — give this phone ITS request back, with
+		# the countdown that is actually left.
+		var request: Dictionary = driver.pending_request_for(player_id)
+		if request.is_empty():
+			return {}
+		request["window_total_ms"] = window_total_ms()
+		request["window_remaining_ms"] = window_remaining_ms()
+		return Protocol.priority_request(request)
+	if driver.window_kind() == "death":
+		var death: Dictionary = driver.pending_request()
+		if int(death.get("player_id", -1)) != player_id:
+			return {}
+		return Protocol.death_request(death)
 	return {}
+
+## The target picker went silent past the safety timeout: cancel the choice,
+## restart the countdown and let the engine continue as if the play was passed.
+func _start_target_timeout() -> void:
+	_target_timer_generation += 1
+	var generation: int = _target_timer_generation
+	if target_timeout_ms <= 0:
+		return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null:
+		return
+	var timer := tree.create_timer(float(target_timeout_ms) / 1000.0, true, false, true)
+	timer.timeout.connect(func() -> void:
+		if generation != _target_timer_generation or _pending_target.is_empty():
+			return
+		_pending_target = {}
+		if driver != null:
+			driver.resume_window()
+		_emit_domain("target_expired", {})
+		emit_snapshot())
 
 func _on_driver_message(msg: Dictionary) -> void:
 	_emit(msg)
@@ -289,6 +343,8 @@ func _connect_domain() -> void:
 	EventBus.eternal_used.connect(_on_eternal_used)
 	EventBus.souls_changed.connect(_on_souls_changed)
 	EventBus.game_won.connect(_on_game_won)
+	EventBus.effect_fizzled.connect(_on_effect_fizzled)
+	EventBus.trigger_pushed.connect(_on_trigger_pushed)
 	_domain_connected = true
 
 func _disconnect_domain() -> void:
@@ -303,6 +359,8 @@ func _disconnect_domain() -> void:
 	EventBus.eternal_used.disconnect(_on_eternal_used)
 	EventBus.souls_changed.disconnect(_on_souls_changed)
 	EventBus.game_won.disconnect(_on_game_won)
+	EventBus.effect_fizzled.disconnect(_on_effect_fizzled)
+	EventBus.trigger_pushed.disconnect(_on_trigger_pushed)
 	_domain_connected = false
 
 func _on_card_drawn(player_id: int, card_id: String, deck: String) -> void:
@@ -334,3 +392,15 @@ func _on_souls_changed(player_id: int, souls: Array, total_value: int) -> void:
 
 func _on_game_won(player_id: int) -> void:
 	_emit_domain("game_won", {"player_id": player_id})
+
+## M4: a stack entry lost its target and applied nothing (auditable trace).
+func _on_effect_fizzled(owner_id: int, card_id: String, reason: String) -> void:
+	_emit_domain("effect_fizzled", {"player_id": owner_id, "card_id": card_id, "reason": reason})
+
+func _on_trigger_pushed(entry: Dictionary) -> void:
+	_emit_domain("trigger_pushed", {
+		"player_id": int(entry.get("owner", 0)),
+		"card_id": String(entry.get("card_id", "")),
+		"trigger": String(entry.get("trigger", "")),
+		"effect": String(entry.get("effect", "")),
+	})

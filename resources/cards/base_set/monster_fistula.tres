@@ -12,3 +12,5 @@ hp = 3
 text = "Deals 1 damage to a random player when it deals damage."
 effect_trigger = "on_death"
 effect_description = "When Fistula dies, the active player draws 1 less loot card this turn."
+trigger_effect = "skip_draw"
+trigger_value = 1

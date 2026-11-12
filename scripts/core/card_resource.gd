@@ -42,3 +42,11 @@ enum CardType { CHARACTER, MONSTER, ITEM_ACTIVE, ITEM_PASSIVE, LOOT, TREASURE, S
 @export var effect_description: String = "" # monster: effect text (I), "" forbidden (explicit "none")
 @export var is_boss: bool = false           # boss: soul card on death, win-condition double count (J)
 @export var soul_value: int = 0             # boss: 1 or 2 souls, ONE soul card that counts twice (J)
+## M4 TriggerEngine (data path): when `effect_trigger` fires and
+## `effect_condition` holds, this keyword is pushed on the stack as a
+## "trigger" entry and resolved by scripts/core/trigger_engine.gd.
+##   "damage_attacker" | "damage_random_player" | "discard_random" |
+##   "gain_cents" | "lose_cents" | "gain_hp" | "skip_draw" | "damage_monster"
+@export var trigger_effect: String = ""
+## Argument for trigger_effect (damage/cents/cards).
+@export var trigger_value: int = 0

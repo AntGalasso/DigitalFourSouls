@@ -12,3 +12,4 @@ text = "Passive: your attack rolls gain +1."
 roll_bonus = 1
 description = "Your attack rolls gain +1."
 activation_type = "passive"
+effect_trigger = "passive"

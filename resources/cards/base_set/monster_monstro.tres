@@ -12,5 +12,7 @@ hp = 4
 text = "BOSS. Deals 1 damage to a random player when it deals damage. Soul: Monstro."
 effect_trigger = "on_miss"
 effect_description = "When the player misses an attack roll against Monstro, they discard 1 loot card."
+trigger_effect = "discard_random"
+trigger_value = 1
 is_boss = true
 soul_value = 2

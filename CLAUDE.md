@@ -142,6 +142,13 @@ exits non-zero if they fail.
   reconnect tokens, static HTTP host for `web_client/`), table mode with
   `game_scene.tscn -- --host` (renders `snapshot_for(-1)` only), gate in
   `scenes/net_test.gd`. Hotseat stays the default without `--host`.
+  **M4 (2026-11-12)** — reaction window 2.0 s in `command_driver.gd`
+  (`window_ms`, pause/resume around `TARGET_REQUEST`), data-driven
+  `trigger_engine.gd` (APNAP, fail-closed conditions), fizzling via
+  `EventBus.effect_fizzled`, 2–4 players, visual public table in
+  `scripts/net/table_view.gd`, phone swipe/tap-rotation in `web_client/`;
+  gate in `scenes/priority_test.gd` (12/12). `priority_window_ms = 0` in
+  hotseat: humans are never auto-passed.
 - Phase 4: Requiem + later expansions, UI polish.
 Each phase should be fully working and merged before the next starts.
 Do not build multiplayer or expansion content while Phase 1 is unproven.

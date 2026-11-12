@@ -92,8 +92,15 @@ static func message(type: String, payload: Dictionary = {}) -> Dictionary:
 
 ## `window_kind` is the server's word on whether a request is still open: a
 ## client that trusts it can never leave a stale overlay on screen.
-static func state_snapshot(snapshot: Dictionary, legal: Dictionary, window_kind: String = "") -> Dictionary:
-	return message(MSG_STATE_SNAPSHOT, {"snapshot": snapshot, "legal": legal, "window_kind": window_kind})
+## `window_remaining_ms` / `window_total_ms` drive the countdown bar on the
+## table screen and on the phones. 0 means "no countdown is running".
+static func state_snapshot(snapshot: Dictionary, legal: Dictionary, window_kind: String = "",
+		window_remaining_ms: int = 0, window_total_ms: int = 0) -> Dictionary:
+	return message(MSG_STATE_SNAPSHOT, {
+		"snapshot": snapshot, "legal": legal, "window_kind": window_kind,
+		"window_remaining_ms": window_remaining_ms,
+		"window_total_ms": window_total_ms,
+	})
 
 ## The engine request, reduced to what a client may know: the entry keeps ids
 ## and numbers only (never a card resource, never another player's hand).
@@ -108,6 +115,8 @@ static func priority_request(request: Dictionary) -> Dictionary:
 		"legal_actions": (request.get("legal_actions", []) as Array).duplicate(true),
 		"phase": String(request.get("phase", "")),
 		"turn_player_id": int(request.get("turn_player_id", -1)),
+		"window_total_ms": int(request.get("window_total_ms", 0)),
+		"window_remaining_ms": int(request.get("window_remaining_ms", request.get("window_total_ms", 0))),
 	})
 
 static func target_request(request_id: String, player_id: int, command_type: String, card_id: String, options: Array) -> Dictionary:

@@ -970,7 +970,10 @@ func _check_ex2_d6_reroll() -> void:
 	ok = ok and _v_pushed.size() == 2
 	ok = ok and _v_pushed[0][0] == "pending_roll" and _v_pushed[0][2] == 2   # raw roll 2, PENDING
 	ok = ok and _v_pushed[1][0] == "modifier"                                # D6 answer ON TOP
-	ok = ok and _v_asks == [0, 1, 0, 1, 0, 1]                              # active first; restart after response; NEW window on the roll after the modifier resolved
+	# M4 reflex round: ONE window per stack entry, every eligible player asked at
+	# the same time in APNAP order. The answer closes the window (no re-ask of
+	# the same player inside it), so two entries = two rounds of [P1, P2].
+	ok = ok and _v_asks == [0, 1, 0, 1]
 	ok = ok and result.get("final_roll", -1) == 5                            # reroll changed the value
 	ok = ok and _v_resolved.size() == 2 and _v_resolved[0][0] == "modifier"  # LIFO: modifier first
 	ok = ok and _v_resolved[1][0] == "pending_roll"

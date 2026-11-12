@@ -100,6 +100,51 @@ button.wide { width: 100%; align-items: center; text-align: center; font-weight:
 button.secondary { background: transparent; }
 button.seat { flex: 1 1 40%; align-items: center; text-align: center; font-weight: 700; }
 button.card, button.monster, button.shop { min-height: 60px; }
+button.card.playable { border-color: #4f7f66; }
+button.card.armed { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(229, 181, 103, 0.55) inset; }
+
+/* M4: items rotate 90° when tapped, exactly like the cardboard. */
+button.item {
+  align-items: center;
+  text-align: center;
+  transition: transform 0.18s ease, border-color 0.18s ease;
+}
+button.item.tapped {
+  transform: rotate(90deg);
+  border-color: var(--danger);
+  opacity: 0.85;
+}
+
+/* M4: reaction countdown (the server's clock, animated here). */
+.countdown {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 8px;
+}
+.countdown .track {
+  flex: 1 1 auto;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  overflow: hidden;
+}
+.countdown i {
+  display: block;
+  height: 100%;
+  background: var(--accent-2);
+  transition: width 0.09s linear, background-color 0.2s ease;
+}
+.countdown span {
+  flex: 0 0 auto;
+  min-width: 42px;
+  text-align: right;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.countdown.urgent i { background: var(--danger); }
+.countdown.urgent span { color: var(--danger); }
 
 #modal[hidden] { display: none; }
 .modal {

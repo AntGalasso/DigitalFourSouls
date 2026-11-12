@@ -15,7 +15,13 @@ corso — hotseat locale, 34 carte, turn loop completo, **29 self-check**
 automatici che passano. Regole normate in `docs/RULES_NORMATIVE.md`; la UI è
 un client passivo sul protocollo comandi/snapshot. **M3**: il PC può fare da
 server WebSocket + host PWA e i telefoni giocano dal browser (`run_table.bat`);
-non ancora espansioni (fase 4).
+non ancora espansioni (fase 4). **M4**: tavolo visivo, priorità a riflessi
+(2,0 s, con pausa durante il targeting), trigger data-driven in ordine APNAP,
+fizzling, 2–4 giocatori, swipe e rotazione oggetti sul telefono.
+
+In modalità tavolo il PC è pubblico e mostra solo `snapshot_for(-1)`: carte
+mostro con barra vita, negozio, Pila ("chi gioca cosa su chi"), plance con
+personaggio e oggetti ruotati di 90° quando tappati, e la barra del countdown.
 
 ## Requisiti
 
@@ -32,6 +38,7 @@ non ancora espansioni (fase 4).
 | `run_game.bat` | Partita hotseat 2 giocatori con la UI (main scene) |
 | `run_table.bat` | Modalità **Tavolo Host**: server WebSocket (8787) + HTTP/PWA (8788); apri sul telefono l'URL LAN mostrato a schermo |
 | `run_net_test.bat` | Gate di rete headless: server vero + 2 client WebSocket (join, privacy, bersaglio, priorità, anti-spoof, reconnect) |
+| `run_priority_test.bat` | Gate M4 headless: countdown 2 s con auto-risoluzione, pausa su bersaglio, trigger APNAP, fizzling, 3–4 giocatori |
 
 ## Architettura (in breve)
 

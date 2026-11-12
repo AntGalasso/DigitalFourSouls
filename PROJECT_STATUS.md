@@ -2,7 +2,23 @@
 
 > Fonte di verità sullo stato del progetto. Aggiornato alla fine di ogni
 > metaprompt (istruzione permanente: sezione "Project status" in CLAUDE.md).
-> Ultimo aggiornamento: **Milestone 3 — server WebSocket + PWA + tavolo**
+> Ultimo aggiornamento: **Milestone 4 — tavolo visivo, priorità a riflessi, trigger**
+> (2026-11-12): il PC è un vero **Tavolo Visivo** (carte mostro con barra HP,
+> dado/danno/ricompensa/testo, negozio con prezzi, **Pila centrale** che mostra
+> "chi gioca cosa su chi", plance pubbliche con personaggio e oggetti ruotati
+> di 90° quando tappati); la priorità diventa una **finestra di reazione di
+> 2,0 s** (`priority_window_ms`, con `window_remaining_ms`/`window_total_ms`
+> nel protocollo): tutti i giocatori con una risposta legale sono interrogati
+> **insieme**, chi risponde per primo vince, il countdown **si congela** mentre
+> si sceglie un bersaglio e **riparte** sul nuovo elemento in cima; alla
+> scadenza il server risolve da solo (`resolve_one`). Arriva il
+> **TriggerEngine data-driven** (`effect_trigger`/`effect_condition`/
+> `trigger_effect` nei `.tres`) in ordine **APNAP**, il **fizzling** dei
+> bersagli morti, il supporto **2–4 giocatori** e sul telefono **swipe-up** per
+> lanciare una Loot, oggetti ruotabili con tap e barra del countdown. Rete
+> **18/18**, suite **29/29**, canary UI **7/7**, gate M4 **12/12**.
+>
+> Precedente: **Milestone 3 — server WebSocket + PWA + tavolo**
 > (2026-11-11): trasporto **RFC 6455 reale** (`TCPServer` +
 > `WebSocketPeer.accept_stream`, frame testo = JSON del protocollo M2) con
 > posti, `reconnect_token` persistito e riconnessione che rimanda snapshot +
@@ -64,6 +80,11 @@
 | **Tavolo Host (M3)** | `scripts/net/table_view.gd`, `game_scene.gd` con `-- --host` | fatto | modalità PC passiva: `snapshot_for(-1)` (nessuna mano), URL LAN grande, stato dei posti, mostri/negozio, pila con tiro pendente, conteggi mazzi, log eventi filtrato. L'hotseat resta il default senza `--host` |
 | **PWA telefoni (M3)** | `web_client/index.html`, `app.js`, `style.css`, `manifest.webmanifest` | fatto | mobile-first, zero build: lobby/join+token, plancia e mano con legalità del server, modale priorità con azioni legali, selettore bersagli, morte a due passi. Connessione a `ws://<host>:<ws_port>` da `/config.json`, riconnessione con backoff |
 | **Gate di rete (M3)** | `scenes/net_test.gd` + `.tscn`, `run_net_test.bat` | fatto | end-to-end headless: server vero su 127.0.0.1, HTTP/PWA, 2 client WebSocket, join, privacy mano, `TARGET_REQUEST`, finestra di priorità con azioni legali, anti-spoof, reconnect con token |
+| **Priorità a riflessi (M4)** | `match_controller.gd`, `drivers/command_driver.gd`, `match_session.gd` | fatto | finestra da 2,0 s (`DEFAULT_PRIORITY_WINDOW_MS`, `0` = hotseat senza timeout), tutti i giocatori con risposte legali interrogati **insieme** (APNAP), primo che risponde vince, **pausa** durante `TARGET_REQUEST` (timeout di sicurezza 30 s), ripresa del countdown sul nuovo elemento, auto-risoluzione alla scadenza; `window_remaining_ms`/`window_total_ms` in `PRIORITY_REQUEST` e `STATE_SNAPSHOT` |
+| **TriggerEngine (M4)** | `scripts/core/trigger_engine.gd` | fatto | trigger dai dati delle carte (`on_roll`, `on_miss`, `on_death`, `on_monster_killed`, `on_card_played`, `on_turn_start`), condizioni con mini-parser fail-closed (`roll == 1`, catene `and`), effetti (`damage_attacker`, `discard_random`, `gain_cents`, `skip_draw`, …), push sulla Pila in **APNAP** con finestra di reazione; Gurdy/Monstro/Fistula + Change Purse/Crow's Heart cablati nei `.tres` |
+| **Fizzling (M4)** | `match_controller.gd` + `EventBus.effect_fizzled` | fatto | se il bersaglio non è più in tavola l'effetto non si applica, emette `effect_fizzled` (log su tavolo e telefoni) e la pila continua |
+| **2–4 giocatori (M4)** | `match_state.gd`, `game_scene.gd --players N`, `table_view.gd` | fatto | posti 2–4 (default 2), rotazione del turno su N, plance e stanze generate dallo snapshot, `--players 3` |
+| **Telefono M4** | `web_client/app.js`, `style.css` | fatto | swipe-up (o tap) per giocare una Loot, "I miei oggetti" con tap = rotazione 90° e attivazione se legale, barra del countdown animata dal tempo del server |
 | **EventStack (MP07/M1/M2)** | `scripts/core/event_stack.gd` | fatto | coda LIFO tipizzata: `pending_roll` (r#), `pending_effect` (e#), `modifier` (m#); **`resolve_one()`** risolve UNA sola entry, quella in cima (Comprehensive Rules: un giro di pass = un oggetto). Se resta qualcosa il controller riapre la finestra prima di risolverla; guardia anti-loop nel controller |
 | CardEffect (base scripted) | `scripts/core/card_effect.gd` | fatto | hook on_play/on_attacked/on_killed/on_event/get_roll_bonus/get_damage_bonus |
 | CardEffectRegistry | `scripts/core/card_effect_registry.gd` | fatto | chiavi per instance_id; dispatcher policy (attivo primo, orario, ordine registrazione); switch simple_effect; unmount lifecycle |
@@ -157,6 +178,20 @@ Canary separata della UI (`scenes/ui_drive_test.tscn`, client passivo): 7/7 PASS
 | `player_id` falsificato | sovrascritto dal posto → `ERROR not_your_turn` |
 | riconnessione col token | stesso `player_id` + snapshot immediato |
 
+### Gate M4 (`scenes/priority_test.tscn`, `run_priority_test.bat`) — **12/12 PASS**
+
+| Verifica | Nota |
+|---|---|
+| countdown che auto-risolve | con finestra 120 ms l'attacco si chiude senza nessun `PASS`, pila vuota |
+| richiesta di priorità viva | P2 riceve la finestra durante l'attacco di P1 |
+| risposta che richiede un bersaglio | il server risponde `TARGET_REQUEST` invece di agire |
+| pausa del countdown | dopo 3× la finestra il prompt è ancora `TARGET_REQUEST` |
+| ripresa dopo la scelta | il Bomb risolve e il bersaglio subisce danno / sparisce |
+| ordine APNAP | con 3 giocatori e attivo P2 l'ordine è `[P2, P3, P1]` |
+| trigger dai dati | Gurdy ha `trigger_effect = damage_attacker`; `roll == 1` vero/falso; refuso = falso |
+| fizzling | `pending_effect` su mostro assente → `effect_fizzled`, nessuna modifica |
+| 3 e 4 giocatori | turni, 3¢ iniziali, snapshot con N plance, wrap del turno |
+
 ## 6. Decisioni architetturali
 
 - **Chiuso in MP07 (stack build):** (a) modifier generici sul tipo `pending_roll`, non casi speciali; (b) Belial applicato subito, D6 alla risoluzione (fedele alle due sequenze esempio); (c) loot in risposta = atomico senza nested window (**superato in M2**: ora è un `pending_effect` sulla pila, risolto con il giro di pass successivo); (d) `reset_combat_state` unico punto di riabilitazione ATTACK, chiamato anche nel path morte; (e) **auto-pass** per i giocatori senza risposte disponibili nella finestra (fedele al testo "finestra visibile a tutti i giocatori con item/loot disponibili").
@@ -166,4 +201,5 @@ Canary separata della UI (`scenes/ui_drive_test.tscn`, client passivo): 7/7 PASS
 - **Aggiunto in M2:** protocollo puro (`match_protocol.gd`), `MatchSession` come server in-process (validazione, `TARGET_REQUEST`, legalità calcolata dal server in `ui_actions()`, eventi privati filtrati, avvio del turno successivo dopo `END_TURN`/morte), `CommandDriver`, e `game_scene.gd` ridotta a client passivo. La canary copre anche la morte a due passi.
 - **Aperte:** TriggerEngine per `effect_trigger` dei mostri (M4); cap HP 6; curse; ordine di scelta tra effetti simultanei; GUT (rinviato, la suite headless resta il cancello).
 - **Aggiunto in M3:** server WebSocket RFC 6455 nativo (`scripts/net/net_server.gd`) con posti e token di riconnessione, host statico integrato per la PWA, modalità Tavolo Host (`-- --host`, solo `snapshot_for(-1)`), client PWA `web_client/` e gate di rete headless con due client veri. `MatchSession` non è cambiata nelle regole: sono solo nati `snapshot_message()` e `pending_prompt()`.
-- **Prossimo (M4):** TriggerEngine per gli `effect_trigger` dei mostri, poi contenuto (altre carte) e rifiniture; eventuale TLS/WSS e limite dei tentativi per il token sono fuori dal perimetro LAN casalingo.
+- **Aggiunto in M4:** tavolo visivo, finestra di priorità a 2,0 s con pausa durante il targeting, TriggerEngine APNAP sui dati delle carte, fizzling, 2–4 giocatori, swipe/rotazione sul telefono; test dedicati in `scenes/priority_test.tscn` (12/12).
+- **Prossimo (M5):** contenuto (altre carte e boss), rifiniture di bilanciamento e animazioni; TLS/WSS e rate-limit del token restano fuori dal perimetro LAN casalingo.

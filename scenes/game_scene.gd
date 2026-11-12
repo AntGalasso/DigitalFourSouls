@@ -70,6 +70,9 @@ func _ready() -> void:
 		return
 	_build_ui()
 	_session = SessionScript.new()
+	# Hotseat has ONE screen and humans read it: the 2.0 s reflex countdown is
+	# disabled here (0 = wait for the click). Table mode keeps the default 2000.
+	_session.priority_window_ms = 0
 	_session.message.connect(_on_message)
 	_session.start(2, Rng.rng.randi())
 	_log_line("Four Souls — authoritative session. Click a monster to attack, a card to play.")
@@ -83,16 +86,20 @@ func _build_host_screen() -> void:
 	var args: PackedStringArray = OS.get_cmdline_user_args()
 	var ws_port: int = 8787
 	var http_port: int = 8788
+	var player_count: int = 2
 	for i in range(args.size()):
 		if args[i] == "--port" and i + 1 < args.size():
 			ws_port = int(args[i + 1])
 		elif args[i] == "--http" and i + 1 < args.size():
 			http_port = int(args[i + 1])
+		elif args[i] == "--players" and i + 1 < args.size():
+			# M4: the table supports 2 to 4 seats.
+			player_count = clampi(int(args[i + 1]), 2, 4)
 	var host_session = SessionScript.new()
 	var net = NetServerScript.new()
 	add_child(net)
 	net.configure(host_session)
-	host_session.start(2, Rng.rng.randi())
+	host_session.start(player_count, Rng.rng.randi())
 	if not net.start(ws_port, http_port):
 		Log.error("game_scene: the network server could not start (port busy?)")
 	var table = TableViewScript.new()

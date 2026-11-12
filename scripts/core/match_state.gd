@@ -63,6 +63,7 @@ const PLAYER_TEMPLATE := {
 	"tapped_items": [],  # Array[String] card ids spent by the death penalty
 	"eternal_used": false,
 	"shield_next_damage": false,
+	"skip_draw": 0,       # M4 triggers: loot draws skipped (e.g. Fistula's death)
 }
 
 # --- Match data ---------------------------------------------------------------
@@ -267,7 +268,11 @@ func snapshot_for(viewer_player_id: int) -> Dictionary:
 			"card_id": card.id,
 			"display_name": card.display_name,
 			"hp": monster["hp"],
+			"max_hp": card.hp,
 			"die_value": card.die_value,
+			"damage": card.damage,
+			"soul_reward": card.soul_reward,
+			"text": card.text,
 			"is_boss": card.is_boss,
 			"effect_trigger": card.effect_trigger,
 			"effect_description": card.effect_description,

@@ -84,6 +84,41 @@ intenzioni.
 7. Disconnessione = stato conservato sul server, mai abbandono della partita.
    Una finestra aperta resta aperta finché il giocatore non risponde.
 
+## 2c. Finestra a riflessi, trigger e fizzling (M4)
+
+1. **Ogni elemento sulla Pila apre una finestra di reazione da 2,0 s**
+   (`priority_window_ms = 2000`, configurabile). Vale per una Loot giocata,
+   un'abilità, un trigger e un tiro di dado.
+2. **Tutti insieme, non a turno.** Durante la finestra vengono interrogati
+   *contemporaneamente* tutti i giocatori con almeno una mossa legale, in
+   ordine APNAP solo per determinismo. Il **primo che risponde vince**; gli
+   altri non aspettano il proprio turno di parola. Senza azioni legali la
+   finestra non viene nemmeno mostrata.
+3. **Pausa durante il targeting.** Se la risposta richiede un bersaglio, il
+   countdown **si congela** finché il giocatore non sceglie (timeout di
+   sicurezza 30 s, `target_timeout_ms`), poi riparte sul nuovo elemento in
+   cima. Nessun auto-pass può colpire chi sta guardando il tavolo.
+4. **Auto-risoluzione.** Se i 2,0 s scadono, la finestra si chiude e il server
+   risolve **un solo** elemento (`resolve_one()`); se sotto ce n'è un altro,
+   parte una **nuova** finestra da 2,0 s per quello. Il tempo residuo viaggia
+   nel protocollo (`window_remaining_ms`, `window_total_ms`) così tavolo e
+   telefoni animano la stessa barra.
+5. **Trigger data-driven, APNAP.** I campi `effect_trigger`,
+   `effect_condition`, `trigger_effect`, `trigger_value` dei `.tres`
+   producono entry di tipo `trigger` sulla Pila, nell'ordine: giocatore attivo,
+   poi in senso orario, infine i mostri in ordine di tavolo. Una condizione
+   malformata vale **falso** (fail-closed): un refuso non fa mai scattare un
+   effetto «sempre».
+6. **Fizzling.** Se al momento della risoluzione il bersaglio non è più
+   valido (mostro già ucciso da una risposta più veloce) l'effetto **non si
+   applica**, emette `effect_fizzled` e la Pila prosegue.
+7. **2–4 giocatori.** Posti, turni e plance sono calcolati sul numero di
+   giocatori (default 2 nei test); nessun calcolo assume più l'avversario
+   unico.
+8. **Hotseat.** In locale il countdown è disattivato (`priority_window_ms = 0`)
+   e la finestra torna sequenziale, perché un umano che legge lo schermo non
+   deve essere auto-passato.
+
 ## 3. Struttura del turno
 
 Fasi (`MatchState.phase`), in ordine:

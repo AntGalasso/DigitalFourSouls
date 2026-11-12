@@ -12,3 +12,4 @@ text = "Passive: your attacks deal +1 damage."
 damage_bonus = 1
 description = "Your attacks deal +1 damage."
 activation_type = "passive"
+effect_trigger = "passive"
